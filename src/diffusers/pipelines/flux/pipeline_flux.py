@@ -177,6 +177,7 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         text_encoder_2: T5EncoderModel,
         tokenizer_2: T5TokenizerFast,
         transformer: FluxTransformer2DModel,
+
     ):
         super().__init__()
 
@@ -205,7 +206,10 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         max_sequence_length: int = 512,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
+        clip_skip: Optional[int] = None,
+        skip_tokens: Optional[List[int]] = None,
     ):
+
         device = device or self._execution_device
         dtype = dtype or self.text_encoder.dtype
 
@@ -221,6 +225,15 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
             return_overflowing_tokens=False,
             return_tensors="pt",
         )
+
+        print("text_ids shape [tokenizer_2 - T5]: ", text_inputs.input_ids.shape)
+
+        # print each token - decode
+        # print("TOKENS IN T5")
+        # for token_idx, token in enumerate(text_inputs.input_ids[0]):
+        #     decoded_token = self.tokenizer_2.decode(token.item())
+        #     print(f"idx: {token_idx}, token: {decoded_token}")
+
         text_input_ids = text_inputs.input_ids
         untruncated_ids = self.tokenizer_2(prompt, padding="longest", return_tensors="pt").input_ids
 
@@ -231,7 +244,69 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                 f" {max_sequence_length} tokens: {removed_text}"
             )
 
-        prompt_embeds = self.text_encoder_2(text_input_ids.to(device), output_hidden_states=False)[0]
+        prompt_embeds = self.text_encoder_2(text_input_ids.to(device), output_hidden_states=True)
+
+        if clip_skip is None:
+            print("Not skiping layers")
+            prompt_embeds = prompt_embeds.hidden_states[-1]
+        else:
+            print("Skiping num layers: ", clip_skip)
+            prompt_embeds = prompt_embeds.hidden_states[-(clip_skip + 1)]
+            # TODO check if needed
+            prompt_embeds = self.text_encoder_2.encoder.final_layer_norm(prompt_embeds)
+
+        if skip_tokens is not None and len(skip_tokens) > 0:
+            print('skip_tokens (T5): ', skip_tokens)
+            skip_tokens_current_model = skip_tokens
+            # print('skip_tokens: ', skip_tokens)
+            state_to_generate_images_from = torch.zeros_like(prompt_embeds)
+            # pad_str = self.tokenizer_2.pad_token
+            padding_tokenized = self.tokenizer_2('',
+                                                 padding="max_length",
+                                                 max_length=max_sequence_length,
+                                                 truncation=True,
+                                                 return_length=False,
+                                                 return_overflowing_tokens=False,
+                                                 return_tensors="pt",
+            )
+            padding_input_ids = padding_tokenized.input_ids
+            # padding_attention_mask = padding_tokenized.attention_mask.to(device)
+            prompt_embeds_paddings = self.text_encoder_2(padding_input_ids.to(device), output_hidden_states=False)[0]
+
+            for token_idx in skip_tokens_current_model:
+                print(f"replacing {token_idx}", end=' ')
+                state_to_generate_images_from[0, token_idx, :] = prompt_embeds_paddings[0, token_idx, :]
+            for token_idx in range(max_sequence_length):
+                if token_idx not in skip_tokens_current_model:
+                    print('Keep token_idx: ', token_idx, end=' ')
+                    state_to_generate_images_from[0, token_idx, :] = prompt_embeds[0, token_idx, :]
+            prompt_embeds = state_to_generate_images_from
+
+        # if skip_tokens is not None:
+        #     print('skip_tokens (T5): ', skip_tokens)
+        #     skip_tokens_current_model = skip_tokens
+        #     # print('skip_tokens: ', skip_tokens)
+        #     state_to_generate_images_from = torch.zeros_like(prompt_embeds)
+        #     pad_str = self.tokenizer_2.pad_token
+        #     padding_tokenized = self.tokenizer_2([pad_str],
+        #                                          padding="max_length",
+        #                                          max_length=max_sequence_length,
+        #                                          truncation=True,
+        #                                          add_special_tokens=True,
+        #                                          return_tensors="pt",
+        #     )
+        #     padding_input_ids = padding_tokenized.input_ids.to(device)
+        #     # padding_attention_mask = padding_tokenized.attention_mask.to(device)
+        #     prompt_embeds_paddings = self.text_encoder_2(padding_input_ids.to(device))[0]
+
+        #     for token_idx in skip_tokens_current_model:
+        #         # print(f"replacing {token_idx}")
+        #         state_to_generate_images_from[0, token_idx, :] = prompt_embeds_paddings[0, token_idx, :]
+        #     for token_idx in range(max_sequence_length):
+        #         if token_idx not in skip_tokens_current_model:
+        #             # print('token_idx: ', token_idx)
+        #             state_to_generate_images_from[0, token_idx, :] = prompt_embeds[0, token_idx, :]
+        #     prompt_embeds = state_to_generate_images_from
 
         dtype = self.text_encoder_2.dtype
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
@@ -249,6 +324,8 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         prompt: Union[str, List[str]],
         num_images_per_prompt: int = 1,
         device: Optional[torch.device] = None,
+        clip_skip: Optional[int] = None,
+        skip_tokens: Optional[List[int]] = None,
     ):
         device = device or self._execution_device
 
@@ -265,6 +342,16 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
             return_tensors="pt",
         )
 
+        print("text_ids shape [tokenizer - CLIP]: ", text_inputs.input_ids.shape)
+
+        # print each token - decode
+        # print("TOKENS IN CLIP")
+        # for token_idx, token in enumerate(text_inputs.input_ids[0]):
+        #     decoded_token = self.tokenizer.decode(token.item())
+        #     print(f"idx: {token_idx}, token: {decoded_token}")
+
+
+
         text_input_ids = text_inputs.input_ids
         untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
         if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
@@ -275,8 +362,41 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
             )
         prompt_embeds = self.text_encoder(text_input_ids.to(device), output_hidden_states=False)
 
-        # Use pooled output of CLIPTextModel
-        prompt_embeds = prompt_embeds.pooler_output
+        # if clip_skip is None:
+        #     prompt_embeds = prompt_embeds.hidden_states[-1]
+        # else:
+        #     prompt_embeds = prompt_embeds.hidden_states[-(clip_skip + 1)]
+        if skip_tokens is not None:
+            # print('skip_tokens CLIP: ', skip_tokens)
+            # state_to_generate_images_from = torch.zeros_like(prompt_embeds)
+            # pad_str = self.tokenizer.pad_token
+            padding_tokenized = self.tokenizer([''], return_tensors="pt", padding="max_length",
+                                               max_length=self.tokenizer.model_max_length)
+            padding_input_ids = padding_tokenized.input_ids.to(device)
+            # padding_attention_mask = padding_tokenized.attention_mask.to(device)
+            text_encoder_output_paddings = self.text_encoder(padding_input_ids.to(device),
+                                                             # attention_mask=padding_attention_mask,
+                                                             output_hidden_states=True)
+            # prompt_embeds_paddings = text_encoder_output_paddings.hidden_states[-1]
+            # for token_idx in skip_tokens:
+            #     # print(f"replacing {token_idx}")
+            #     state_to_generate_images_from[0, token_idx, :] = prompt_embeds_paddings[0, token_idx, :]
+            # for token_idx in range(self.tokenizer_max_length):
+            #     if token_idx not in skip_tokens:
+            #         # print('token_idx: ', token_idx)
+            #         state_to_generate_images_from[0, token_idx, :] = prompt_embeds[0, token_idx, :]
+            # prompt_embeds = state_to_generate_images_from
+            # TODO check if this ends up generation correct images
+            pooled_prompt_embeds_paddings = text_encoder_output_paddings.pooler_output
+            print("replacing pooled_prompt_embeds with padding pooled_prompt_embeds")
+            prompt_embeds = pooled_prompt_embeds_paddings
+        else:
+            print("Original CLIP pooling code")
+            # prompt_embeds = self.text_encoder(text_input_ids.to(device), output_hidden_states=False)
+
+            # Use pooled output of CLIPTextModel
+            prompt_embeds = prompt_embeds.pooler_output
+
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype, device=device)
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
@@ -295,6 +415,8 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
         max_sequence_length: int = 512,
         lora_scale: Optional[float] = None,
+        clip_skip: Optional[List[int]] = None,
+        skip_tokens: Optional[List[int]] = None,
     ):
         r"""
 
@@ -345,12 +467,17 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                 prompt=prompt,
                 device=device,
                 num_images_per_prompt=num_images_per_prompt,
+                # skip_tokens=skip_tokens[0],
+                clip_skip=clip_skip
             )
+
             prompt_embeds = self._get_t5_prompt_embeds(
                 prompt=prompt_2,
                 num_images_per_prompt=num_images_per_prompt,
                 max_sequence_length=max_sequence_length,
                 device=device,
+                skip_tokens=skip_tokens[1],
+                clip_skip=clip_skip
             )
 
         if self.text_encoder is not None:
@@ -525,6 +652,10 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
+        clip_skip: Optional[int] = None,
+        skip_tokens: Optional[List[int]] = None,
+        prompt_len: Optional[int] = None,
+        mask_diffusion: Optional[bool] = False,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -641,6 +772,8 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
             lora_scale=lora_scale,
+            clip_skip=clip_skip,
+            skip_tokens=skip_tokens
         )
 
         # 4. Prepare latent variables
@@ -692,7 +825,9 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                     guidance = guidance.expand(latents.shape[0])
                 else:
                     guidance = None
-
+                # prompt_embeds_copy = prompt_embeds.clone()
+                if not mask_diffusion:
+                    prompt_len = None
                 noise_pred = self.transformer(
                     hidden_states=latents,
                     # YiYi notes: divide it by 1000 for now because we scale it by 1000 in the transforme rmodel (we should not keep it but I want to keep the inputs same for the model for testing)
@@ -700,11 +835,18 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                     guidance=guidance,
                     pooled_projections=pooled_prompt_embeds,
                     encoder_hidden_states=prompt_embeds,
+                    prompt_len=prompt_len,
                     txt_ids=text_ids,
                     img_ids=latent_image_ids,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
                 )[0]
+
+                # # chck if the prompt_embeds are changed
+                # if not torch.equal(prompt_embeds, prompt_embeds_copy):
+                #     print("Prompt embeds changed")
+                # else:
+                #     print("Prompt embeds not changed")
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype

@@ -36,6 +36,8 @@ from ...models import AutoencoderKL, ImageProjection, UNet2DConditionModel
 from ...models.attention_processor import (
     AttnProcessor2_0,
     FusedAttnProcessor2_0,
+    LoRAAttnProcessor2_0,
+    LoRAXFormersAttnProcessor,
     XFormersAttnProcessor,
 )
 from ...models.lora import adjust_lora_scale_text_encoder
@@ -287,6 +289,8 @@ class StableDiffusionXLPipeline(
         negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
         lora_scale: Optional[float] = None,
         clip_skip: Optional[int] = None,
+        skip_tokens: Optional[List[List[int]]] = None,
+        max_sequence_length: Optional[int] = None,
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -330,7 +334,9 @@ class StableDiffusionXLPipeline(
                 Number of layers to be skipped from CLIP while computing the prompt embeddings. A value of 1 means that
                 the output of the pre-final layer will be used for computing the prompt embeddings.
         """
+        print('inside encode_prompt. The skip_tokens are: ', skip_tokens)
         device = device or self._execution_device
+        # print('tokenizer.model_max_length: ', tokenizer.model_max_length)
 
         # set lora scale so that monkey patched LoRA
         # function of text encoder can correctly access it
@@ -370,10 +376,14 @@ class StableDiffusionXLPipeline(
             # textual inversion: process multi-vector tokens if necessary
             prompt_embeds_list = []
             prompts = [prompt, prompt_2]
-            for prompt, tokenizer, text_encoder in zip(prompts, tokenizers, text_encoders):
+            for text_encoder_index , (prompt, tokenizer, text_encoder) in (
+                    enumerate(zip(prompts, tokenizers, text_encoders))):
                 if isinstance(self, TextualInversionLoaderMixin):
                     prompt = self.maybe_convert_prompt(prompt, tokenizer)
+                tokenizer.model_max_length = max_sequence_length
+                print('max_sequence_length: ', tokenizer.model_max_length)
 
+                print(f'text_encoder_index: {text_encoder_index}')
                 text_inputs = tokenizer(
                     prompt,
                     padding="max_length",
@@ -403,6 +413,42 @@ class StableDiffusionXLPipeline(
                 else:
                     # "2" because SDXL always indexes from the penultimate layer.
                     prompt_embeds = prompt_embeds.hidden_states[-(clip_skip + 2)]
+
+                print('in loop. skip_tokens: ', skip_tokens)
+                if skip_tokens is not None and skip_tokens[text_encoder_index] is not None and (len(skip_tokens[text_encoder_index]) > 0):
+                    skip_tokens_current_model = skip_tokens[text_encoder_index]
+                    print('skip_tokens: ', skip_tokens)
+                    state_to_generate_images_from = torch.zeros_like(prompt_embeds)
+                    # pad_str = tokenizer.pad_token  # 'An amazing image, 4K, high quality, visually stunning and beautiful.' #
+                    padding_tokenized = tokenizer('', return_tensors="pt", padding="max_length",
+                                                       max_length=tokenizer.model_max_length)
+                    padding_input_ids = padding_tokenized.input_ids.to(device)
+                    padding_attention_mask = padding_tokenized.attention_mask.to(device)
+                    text_encoder_output_paddings = text_encoder(padding_input_ids.to(device),
+                                                                     output_hidden_states=True,
+                                                                     attention_mask=padding_attention_mask)
+                    padding_embeds = text_encoder_output_paddings.hidden_states[-2]
+                    # replace the pooled prompt embeds with the pooled prompt embeds from the padding
+                    pooled_prompt_embeds = text_encoder_output_paddings[0]
+                    # padding_embeds = self.text_encoder.text_model.final_layer_norm(padding_embeds)
+
+                    # text_encoder_output_paddings = self.text_encoder(padding_input_ids.to(device), attention_mask=padding_attention_mask,
+                    #                                    output_hidden_states=True,
+                    #                                 return_dict=True)
+                    # padding_embeds = text_encoder_output_paddings.hidden_states[-1]
+                    # padding_embeds = padding_embeds[-1]
+                    # padding_embeds = self.text_encoder.text_model.final_layer_norm(padding_embeds)
+                    # padding_embeds = padding_embeds.unsqueeze(0)
+                    for token_idx in skip_tokens_current_model:
+                        # print(f"replacing {token_idx}")
+                        state_to_generate_images_from[0, token_idx, :] = padding_embeds[0, token_idx, :]
+                    for token_idx in range(77):
+                        if token_idx not in skip_tokens_current_model:
+                            # print('token_idx: ', token_idx)
+                            state_to_generate_images_from[0, token_idx, :] = prompt_embeds[0, token_idx, :]
+                    prompt_embeds = state_to_generate_images_from
+
+                    # print('prompt_embeds shape: ', prompt_embeds.shape)
 
                 prompt_embeds_list.append(prompt_embeds)
 
@@ -535,9 +581,6 @@ class StableDiffusionXLPipeline(
     def prepare_ip_adapter_image_embeds(
         self, ip_adapter_image, ip_adapter_image_embeds, device, num_images_per_prompt, do_classifier_free_guidance
     ):
-        image_embeds = []
-        if do_classifier_free_guidance:
-            negative_image_embeds = []
         if ip_adapter_image_embeds is None:
             if not isinstance(ip_adapter_image, list):
                 ip_adapter_image = [ip_adapter_image]
@@ -547,6 +590,7 @@ class StableDiffusionXLPipeline(
                     f"`ip_adapter_image` must have same length as the number of IP Adapters. Got {len(ip_adapter_image)} images and {len(self.unet.encoder_hid_proj.image_projection_layers)} IP Adapters."
                 )
 
+            image_embeds = []
             for single_ip_adapter_image, image_proj_layer in zip(
                 ip_adapter_image, self.unet.encoder_hid_proj.image_projection_layers
             ):
@@ -554,28 +598,36 @@ class StableDiffusionXLPipeline(
                 single_image_embeds, single_negative_image_embeds = self.encode_image(
                     single_ip_adapter_image, device, 1, output_hidden_state
                 )
+                single_image_embeds = torch.stack([single_image_embeds] * num_images_per_prompt, dim=0)
+                single_negative_image_embeds = torch.stack(
+                    [single_negative_image_embeds] * num_images_per_prompt, dim=0
+                )
 
-                image_embeds.append(single_image_embeds[None, :])
                 if do_classifier_free_guidance:
-                    negative_image_embeds.append(single_negative_image_embeds[None, :])
+                    single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds])
+                    single_image_embeds = single_image_embeds.to(device)
+
+                image_embeds.append(single_image_embeds)
         else:
+            repeat_dims = [1]
+            image_embeds = []
             for single_image_embeds in ip_adapter_image_embeds:
                 if do_classifier_free_guidance:
                     single_negative_image_embeds, single_image_embeds = single_image_embeds.chunk(2)
-                    negative_image_embeds.append(single_negative_image_embeds)
+                    single_image_embeds = single_image_embeds.repeat(
+                        num_images_per_prompt, *(repeat_dims * len(single_image_embeds.shape[1:]))
+                    )
+                    single_negative_image_embeds = single_negative_image_embeds.repeat(
+                        num_images_per_prompt, *(repeat_dims * len(single_negative_image_embeds.shape[1:]))
+                    )
+                    single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds])
+                else:
+                    single_image_embeds = single_image_embeds.repeat(
+                        num_images_per_prompt, *(repeat_dims * len(single_image_embeds.shape[1:]))
+                    )
                 image_embeds.append(single_image_embeds)
 
-        ip_adapter_image_embeds = []
-        for i, single_image_embeds in enumerate(image_embeds):
-            single_image_embeds = torch.cat([single_image_embeds] * num_images_per_prompt, dim=0)
-            if do_classifier_free_guidance:
-                single_negative_image_embeds = torch.cat([negative_image_embeds[i]] * num_images_per_prompt, dim=0)
-                single_image_embeds = torch.cat([single_negative_image_embeds, single_image_embeds], dim=0)
-
-            single_image_embeds = single_image_embeds.to(device=device)
-            ip_adapter_image_embeds.append(single_image_embeds)
-
-        return ip_adapter_image_embeds
+        return image_embeds
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
     def prepare_extra_step_kwargs(self, generator, eta):
@@ -740,6 +792,8 @@ class StableDiffusionXLPipeline(
             (
                 AttnProcessor2_0,
                 XFormersAttnProcessor,
+                LoRAXFormersAttnProcessor,
+                LoRAAttnProcessor2_0,
                 FusedAttnProcessor2_0,
             ),
         )
@@ -852,6 +906,8 @@ class StableDiffusionXLPipeline(
         negative_crops_coords_top_left: Tuple[int, int] = (0, 0),
         negative_target_size: Optional[Tuple[int, int]] = None,
         clip_skip: Optional[int] = None,
+        skip_tokens: Optional[List[List[int]]] = None,
+        max_sequence_length: Optional[int] = None,
         callback_on_step_end: Optional[
             Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
         ] = None,
@@ -1088,7 +1144,10 @@ class StableDiffusionXLPipeline(
             negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
             lora_scale=lora_scale,
             clip_skip=self.clip_skip,
+            skip_tokens=skip_tokens,
+            max_sequence_length=max_sequence_length
         )
+        print("inside __call__. The skip_tokens are: ", skip_tokens)
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(

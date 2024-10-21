@@ -320,6 +320,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         img_ids: torch.Tensor = None,
         txt_ids: torch.Tensor = None,
         guidance: torch.Tensor = None,
+        prompt_len: int = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
     ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
@@ -375,7 +376,10 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
             if guidance is None
             else self.time_text_embed(timestep, guidance, pooled_projections)
         )
+
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
+
+            
 
         ids = torch.cat((txt_ids, img_ids), dim=1)
         image_rotary_emb = self.pos_embed(ids)
@@ -393,6 +397,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     return custom_forward
 
                 ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+
                 encoder_hidden_states, hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(block),
                     hidden_states,
@@ -401,14 +406,25 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     image_rotary_emb,
                     **ckpt_kwargs,
                 )
+                # if encoder_hidden_states_copy is not None:
+                #     if encoder_hidden_states_copy.shape != encoder_hidden_states.shape:
+                #         print("encoder_hidden_states_copy.shape != encoder_hidden_states.shape")
 
             else:
+                transfer_pads = True
+
+                if prompt_len is not None:
+                    print("replacing pads info with empty info. prompt_len =", prompt_len)
+                    encoder_hidden_states[1, prompt_len+1:, :] = encoder_hidden_states[0, prompt_len+1:, :] # 1 - pads info
+                    encoder_hidden_states[2, prompt_len+1:, :] = torch.zeros_like(encoder_hidden_states[3, prompt_len+1:, :]) # 2 - remove pads info with empty 
+                    # encoder_hidden_states[2, :, :] = torch.zeros_like(encoder_hidden_states[3, :, :])
                 encoder_hidden_states, hidden_states = block(
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
                 )
+
 
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
@@ -425,6 +441,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     return custom_forward
 
                 ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(block),
                     hidden_states,
@@ -434,6 +451,10 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                 )
 
             else:
+                if prompt_len is not None:
+                    hidden_states[1, prompt_len+1:encoder_hidden_states.shape[1] + 1, :] = hidden_states[0, prompt_len+1:encoder_hidden_states.shape[1] + 1, :]
+                    hidden_states[2, prompt_len+1:encoder_hidden_states.shape[1] + 1, :] = torch.zeros_like(hidden_states[3, prompt_len+1:encoder_hidden_states.shape[1] + 1, :])
+                    # hidden_states[2, :encoder_hidden_states.shape[1], :] = torch.zeros_like(hidden_states[3, :encoder_hidden_states.shape[1], :])
                 hidden_states = block(
                     hidden_states=hidden_states,
                     temb=temb,
