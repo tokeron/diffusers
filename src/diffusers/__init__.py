@@ -1,4 +1,4 @@
-__version__ = "0.30.2"
+__version__ = "0.31.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -31,6 +31,7 @@ _import_structure = {
     "loaders": ["FromOriginalModelMixin"],
     "models": [],
     "pipelines": [],
+    "quantizers.quantization_config": ["BitsAndBytesConfig"],
     "schedulers": [],
     "utils": [
         "OptionalDependencyNotAvailable",
@@ -84,10 +85,13 @@ else:
             "AutoencoderOobleck",
             "AutoencoderTiny",
             "CogVideoXTransformer3DModel",
+            "CogView3PlusTransformer2DModel",
             "ConsistencyDecoderVAE",
             "ControlNetModel",
             "ControlNetXSAdapter",
             "DiTTransformer2DModel",
+            "FluxControlNetModel",
+            "FluxMultiControlNetModel",
             "FluxTransformer2DModel",
             "HunyuanDiT2DControlNetModel",
             "HunyuanDiT2DModel",
@@ -121,7 +125,6 @@ else:
             "VQModel",
         ]
     )
-
     _import_structure["optimization"] = [
         "get_constant_schedule",
         "get_constant_schedule_with_warmup",
@@ -153,6 +156,7 @@ else:
             "StableDiffusionMixin",
         ]
     )
+    _import_structure["quantizers"] = ["DiffusersQuantizer"]
     _import_structure["schedulers"].extend(
         [
             "AmusedScheduler",
@@ -243,6 +247,7 @@ else:
             "AnimateDiffPipeline",
             "AnimateDiffSDXLPipeline",
             "AnimateDiffSparseControlNetPipeline",
+            "AnimateDiffVideoToVideoControlNetPipeline",
             "AnimateDiffVideoToVideoPipeline",
             "AudioLDM2Pipeline",
             "AudioLDM2ProjectionModel",
@@ -252,8 +257,17 @@ else:
             "BlipDiffusionControlNetPipeline",
             "BlipDiffusionPipeline",
             "CLIPImageProjection",
+            "CogVideoXFunControlPipeline",
+            "CogVideoXImageToVideoPipeline",
             "CogVideoXPipeline",
+            "CogVideoXVideoToVideoPipeline",
+            "CogView3PlusPipeline",
             "CycleDiffusionPipeline",
+            "FluxControlNetImg2ImgPipeline",
+            "FluxControlNetInpaintPipeline",
+            "FluxControlNetPipeline",
+            "FluxImg2ImgPipeline",
+            "FluxInpaintPipeline",
             "FluxPipeline",
             "HunyuanDiTControlNetPipeline",
             "HunyuanDiTPAGPipeline",
@@ -308,6 +322,7 @@ else:
             "StableCascadeCombinedPipeline",
             "StableCascadeDecoderPipeline",
             "StableCascadePriorPipeline",
+            "StableDiffusion3ControlNetInpaintingPipeline",
             "StableDiffusion3ControlNetPipeline",
             "StableDiffusion3Img2ImgPipeline",
             "StableDiffusion3InpaintPipeline",
@@ -317,6 +332,7 @@ else:
             "StableDiffusionAttendAndExcitePipeline",
             "StableDiffusionControlNetImg2ImgPipeline",
             "StableDiffusionControlNetInpaintPipeline",
+            "StableDiffusionControlNetPAGInpaintPipeline",
             "StableDiffusionControlNetPAGPipeline",
             "StableDiffusionControlNetPipeline",
             "StableDiffusionControlNetXSPipeline",
@@ -332,6 +348,7 @@ else:
             "StableDiffusionLatentUpscalePipeline",
             "StableDiffusionLDM3DPipeline",
             "StableDiffusionModelEditingPipeline",
+            "StableDiffusionPAGImg2ImgPipeline",
             "StableDiffusionPAGPipeline",
             "StableDiffusionPanoramaPipeline",
             "StableDiffusionParadigmsPipeline",
@@ -343,6 +360,7 @@ else:
             "StableDiffusionXLAdapterPipeline",
             "StableDiffusionXLControlNetImg2ImgPipeline",
             "StableDiffusionXLControlNetInpaintPipeline",
+            "StableDiffusionXLControlNetPAGImg2ImgPipeline",
             "StableDiffusionXLControlNetPAGPipeline",
             "StableDiffusionXLControlNetPipeline",
             "StableDiffusionXLControlNetXSPipeline",
@@ -521,6 +539,7 @@ else:
 
 if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
     from .configuration_utils import ConfigMixin
+    from .quantizers.quantization_config import BitsAndBytesConfig
 
     try:
         if not is_onnx_available():
@@ -545,10 +564,13 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             AutoencoderOobleck,
             AutoencoderTiny,
             CogVideoXTransformer3DModel,
+            CogView3PlusTransformer2DModel,
             ConsistencyDecoderVAE,
             ControlNetModel,
             ControlNetXSAdapter,
             DiTTransformer2DModel,
+            FluxControlNetModel,
+            FluxMultiControlNetModel,
             FluxTransformer2DModel,
             HunyuanDiT2DControlNetModel,
             HunyuanDiT2DModel,
@@ -612,6 +634,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             ScoreSdeVePipeline,
             StableDiffusionMixin,
         )
+        from .quantizers import DiffusersQuantizer
         from .schedulers import (
             AmusedScheduler,
             CMStochasticIterativeScheduler,
@@ -684,6 +707,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             AnimateDiffPipeline,
             AnimateDiffSDXLPipeline,
             AnimateDiffSparseControlNetPipeline,
+            AnimateDiffVideoToVideoControlNetPipeline,
             AnimateDiffVideoToVideoPipeline,
             AudioLDM2Pipeline,
             AudioLDM2ProjectionModel,
@@ -691,8 +715,17 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             AudioLDMPipeline,
             AuraFlowPipeline,
             CLIPImageProjection,
+            CogVideoXFunControlPipeline,
+            CogVideoXImageToVideoPipeline,
             CogVideoXPipeline,
+            CogVideoXVideoToVideoPipeline,
+            CogView3PlusPipeline,
             CycleDiffusionPipeline,
+            FluxControlNetImg2ImgPipeline,
+            FluxControlNetInpaintPipeline,
+            FluxControlNetPipeline,
+            FluxImg2ImgPipeline,
+            FluxInpaintPipeline,
             FluxPipeline,
             HunyuanDiTControlNetPipeline,
             HunyuanDiTPAGPipeline,
@@ -756,6 +789,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             StableDiffusionAttendAndExcitePipeline,
             StableDiffusionControlNetImg2ImgPipeline,
             StableDiffusionControlNetInpaintPipeline,
+            StableDiffusionControlNetPAGInpaintPipeline,
             StableDiffusionControlNetPAGPipeline,
             StableDiffusionControlNetPipeline,
             StableDiffusionControlNetXSPipeline,
@@ -771,6 +805,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             StableDiffusionLatentUpscalePipeline,
             StableDiffusionLDM3DPipeline,
             StableDiffusionModelEditingPipeline,
+            StableDiffusionPAGImg2ImgPipeline,
             StableDiffusionPAGPipeline,
             StableDiffusionPanoramaPipeline,
             StableDiffusionParadigmsPipeline,
@@ -782,6 +817,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             StableDiffusionXLAdapterPipeline,
             StableDiffusionXLControlNetImg2ImgPipeline,
             StableDiffusionXLControlNetInpaintPipeline,
+            StableDiffusionXLControlNetPAGImg2ImgPipeline,
             StableDiffusionXLControlNetPAGPipeline,
             StableDiffusionXLControlNetPipeline,
             StableDiffusionXLControlNetXSPipeline,

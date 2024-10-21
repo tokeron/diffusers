@@ -123,8 +123,16 @@ else:
         "AnimateDiffSDXLPipeline",
         "AnimateDiffSparseControlNetPipeline",
         "AnimateDiffVideoToVideoPipeline",
+        "AnimateDiffVideoToVideoControlNetPipeline",
     ]
-    _import_structure["flux"] = ["FluxPipeline"]
+    _import_structure["flux"] = [
+        "FluxControlNetPipeline",
+        "FluxControlNetImg2ImgPipeline",
+        "FluxControlNetInpaintPipeline",
+        "FluxImg2ImgPipeline",
+        "FluxInpaintPipeline",
+        "FluxPipeline",
+    ]
     _import_structure["audioldm"] = ["AudioLDMPipeline"]
     _import_structure["audioldm2"] = [
         "AudioLDM2Pipeline",
@@ -132,7 +140,13 @@ else:
         "AudioLDM2UNet2DConditionModel",
     ]
     _import_structure["blip_diffusion"] = ["BlipDiffusionPipeline"]
-    _import_structure["cogvideo"] = ["CogVideoXPipeline"]
+    _import_structure["cogvideo"] = [
+        "CogVideoXPipeline",
+        "CogVideoXImageToVideoPipeline",
+        "CogVideoXVideoToVideoPipeline",
+        "CogVideoXFunControlPipeline",
+    ]
+    _import_structure["cogview3"] = ["CogView3PlusPipeline"]
     _import_structure["controlnet"].extend(
         [
             "BlipDiffusionControlNetPipeline",
@@ -146,14 +160,17 @@ else:
     )
     _import_structure["pag"].extend(
         [
+            "StableDiffusionControlNetPAGInpaintPipeline",
             "AnimateDiffPAGPipeline",
             "KolorsPAGPipeline",
             "HunyuanDiTPAGPipeline",
             "StableDiffusion3PAGPipeline",
             "StableDiffusionPAGPipeline",
+            "StableDiffusionPAGImg2ImgPipeline",
             "StableDiffusionControlNetPAGPipeline",
             "StableDiffusionXLPAGPipeline",
             "StableDiffusionXLPAGInpaintPipeline",
+            "StableDiffusionXLControlNetPAGImg2ImgPipeline",
             "StableDiffusionXLControlNetPAGPipeline",
             "StableDiffusionXLPAGImg2ImgPipeline",
             "PixArtSigmaPAGPipeline",
@@ -173,6 +190,7 @@ else:
     _import_structure["controlnet_sd3"].extend(
         [
             "StableDiffusion3ControlNetPipeline",
+            "StableDiffusion3ControlNetInpaintingPipeline",
         ]
     )
     _import_structure["deepfloyd_if"] = [
@@ -442,6 +460,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             AnimateDiffPipeline,
             AnimateDiffSDXLPipeline,
             AnimateDiffSparseControlNetPipeline,
+            AnimateDiffVideoToVideoControlNetPipeline,
             AnimateDiffVideoToVideoPipeline,
         )
         from .audioldm import AudioLDMPipeline
@@ -452,7 +471,13 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
         )
         from .aura_flow import AuraFlowPipeline
         from .blip_diffusion import BlipDiffusionPipeline
-        from .cogvideo import CogVideoXPipeline
+        from .cogvideo import (
+            CogVideoXFunControlPipeline,
+            CogVideoXImageToVideoPipeline,
+            CogVideoXPipeline,
+            CogVideoXVideoToVideoPipeline,
+        )
+        from .cogview3 import CogView3PlusPipeline
         from .controlnet import (
             BlipDiffusionControlNetPipeline,
             StableDiffusionControlNetImg2ImgPipeline,
@@ -465,9 +490,7 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
         from .controlnet_hunyuandit import (
             HunyuanDiTControlNetPipeline,
         )
-        from .controlnet_sd3 import (
-            StableDiffusion3ControlNetPipeline,
-        )
+        from .controlnet_sd3 import StableDiffusion3ControlNetInpaintingPipeline, StableDiffusion3ControlNetPipeline
         from .controlnet_xs import (
             StableDiffusionControlNetXSPipeline,
             StableDiffusionXLControlNetXSPipeline,
@@ -494,7 +517,14 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             VersatileDiffusionTextToImagePipeline,
             VQDiffusionPipeline,
         )
-        from .flux import FluxPipeline
+        from .flux import (
+            FluxControlNetImg2ImgPipeline,
+            FluxControlNetInpaintPipeline,
+            FluxControlNetPipeline,
+            FluxImg2ImgPipeline,
+            FluxInpaintPipeline,
+            FluxPipeline,
+        )
         from .hunyuandit import HunyuanDiTPipeline
         from .i2vgen_xl import I2VGenXLPipeline
         from .kandinsky import (
@@ -546,8 +576,11 @@ if TYPE_CHECKING or DIFFUSERS_SLOW_IMPORT:
             KolorsPAGPipeline,
             PixArtSigmaPAGPipeline,
             StableDiffusion3PAGPipeline,
+            StableDiffusionControlNetPAGInpaintPipeline,
             StableDiffusionControlNetPAGPipeline,
+            StableDiffusionPAGImg2ImgPipeline,
             StableDiffusionPAGPipeline,
+            StableDiffusionXLControlNetPAGImg2ImgPipeline,
             StableDiffusionXLControlNetPAGPipeline,
             StableDiffusionXLPAGImg2ImgPipeline,
             StableDiffusionXLPAGInpaintPipeline,
