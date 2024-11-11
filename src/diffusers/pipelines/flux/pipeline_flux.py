@@ -475,7 +475,7 @@ class FluxPipeline(
                 device=device,
                 num_images_per_prompt=num_images_per_prompt,
                 # skip_tokens=skip_tokens[0],
-                clip_skip=clip_skip
+                # clip_skip=clip_skip[0]
             )
 
             prompt_embeds = self._get_t5_prompt_embeds(
@@ -484,7 +484,7 @@ class FluxPipeline(
                 max_sequence_length=max_sequence_length,
                 device=device,
                 skip_tokens=skip_tokens[1],
-                clip_skip=clip_skip
+                clip_skip=clip_skip[1]
             )
 
         if self.text_encoder is not None:

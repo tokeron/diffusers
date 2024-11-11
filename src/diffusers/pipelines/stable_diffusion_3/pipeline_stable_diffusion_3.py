@@ -973,7 +973,7 @@ class StableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSingle
                     pooled_projections=pooled_prompt_embeds,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
-                    attention_mask=attention_mask,
+                    # attention_mask=attention_mask,
                 )[0]
 
                 # import inspect
