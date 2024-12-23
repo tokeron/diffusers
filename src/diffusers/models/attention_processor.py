@@ -1991,36 +1991,80 @@ class FluxAttnProcessor2_0:
 
             # Dictionary to store the sorted indices of the self-attention 
             # between each entity and all the image latent tokens
-            image_latent_topk_indices_per_token_entity = {
-                entity: {"keys": list(token_entity_indices), "values": []} for entity, token_entity_indices in token_entity_indices.items()
+            image_latent_topk_indices_per_token_per_entity = {
+                entity: {index: [] for index in indices}
+                for entity, indices in token_entity_indices.items()
             }
-            
-            for curr_entity, curr_token_entity_indices in image_latent_topk_indices_per_token_entity.items():
+
+            image_latent_top_indices_per_entity = { entity: [] for entity in token_entity_indices.keys() }
+
+            # finding for each text entity, for each subtoken, the top-k image latent tokens
+            for curr_entity, curr_token_entity_indices in image_latent_topk_indices_per_token_per_entity.items(): # for entity
                 image_query_entity_key_list = []
-                for token_entity_index in curr_token_entity_indices:
-                    image_query_entity_key_vector = attn_weight[:, :, num_text_tokens:, token_entity_index]
-                    # image_key_entity_query_vector = attn_weight[:, :, curr_token_entity_index, num_text_tokens:]
+                for token_entity_index in curr_token_entity_indices: # for token
+                    image_query_entity_key_vector = attn_weight[:, :, num_text_tokens:, token_entity_index] # image as query, text as key 
+                    # image_key_entity_query_vector = attn_weight[:, :, curr_token_entity_index, num_text_tokens:] # image as key, text as query
                     _, topk_indices_image_query_entity_key = torch.topk(image_query_entity_key_vector, top_k_text_image_indices)
-                    topk_indices_image_query_entity_key += num_text_tokens # Important bug fix
+                    topk_indices_image_query_entity_key += num_text_tokens # Important: relative to the image latent tokens start
+                    image_latent_topk_indices_per_token_per_entity[curr_entity][token_entity_index] = topk_indices_image_query_entity_key
+
                     image_query_entity_key_list.append(topk_indices_image_query_entity_key)
 
-                image_latent_topk_indices_per_token_entity[curr_entity] = {
-                    'image_query_entity_key': set(topk_indices_image_query_entity_key),
-                }
+                # combining (union) all the top-k indices of all the subtokens for each entity
+                image_query_entity_key_tensor =  torch.stack(image_query_entity_key_list, dim=-1)
+                image_latent_top_indices_per_entity[curr_entity] = image_query_entity_key_tensor.view(image_query_entity_key_tensor.shape[0], image_query_entity_key_tensor.shape[1], -1)
 
-            for first_entity, first_entity_sorted_indices in image_latent_topk_indices_per_token_entity.items():
-                for second_entity, second_entity_sorted_indices in image_latent_topk_indices_per_token_entity.items():
+                # image_latent_topk_indices_per_token_entity[curr_entity] = {
+                #     'image_query_entity_key': set(topk_indices_image_query_entity_key),
+                # }
+
+            for first_entity, first_entity_sorted_indices in image_latent_top_indices_per_entity.items():
+                for second_entity, second_entity_sorted_indices in image_latent_top_indices_per_entity.items():
                     if first_entity == second_entity:
                         continue
-                    top_k_image_indices_first_entity = first_entity_sorted_indices["image_query_entity_key"].to('cuda')
-                    top_k_image_indices_second_entity = second_entity_sorted_indices["image_query_entity_key"].to('cuda')
-                    attn_weight = attn_weight.to('cuda')
 
                     # Create proper index broadcasting
-                    batch_idx = torch.arange(bs)[:, None, None, None].expand(bs, num_heads, top_k_text_image_indices, top_k_text_image_indices)
-                    head_idx = torch.arange(num_heads)[None, :, None, None].expand(bs, num_heads, top_k_text_image_indices, top_k_text_image_indices)
-                    first_idx = top_k_image_indices_first_entity[:, :, :, None].expand(bs, num_heads, top_k_text_image_indices, top_k_text_image_indices)
-                    second_idx = top_k_image_indices_second_entity[:, :, None, :].expand(bs, num_heads, top_k_text_image_indices, top_k_text_image_indices)
+                    # batch_idx = torch.arange(bs)[:, None, None, None].expand(bs, num_heads, top_k_text_image_indices, top_k_text_image_indices)
+                    # head_idx = torch.arange(num_heads)[None, :, None, None].expand(bs, num_heads, top_k_text_image_indices, top_k_text_image_indices)
+                    # first_idx = top_k_image_indices_first_entity[:, :, :, None].expand(bs, num_heads, top_k_text_image_indices, top_k_text_image_indices)
+                    # second_idx = top_k_image_indices_second_entity[:, :, None, :].expand(bs, num_heads, top_k_text_image_indices, top_k_text_image_indices)
+                    max_indices = max(first_entity_sorted_indices.shape[-1], second_entity_sorted_indices.shape[-1])
+                    min_indices = min(first_entity_sorted_indices.shape[-1], second_entity_sorted_indices.shape[-1])
+                    # repeat_ratio = max_indices // min_indices
+                    arg_min_entity = [first_entity_sorted_indices.shape[-1], second_entity_sorted_indices.shape[-1]].index(min_indices) # 0 for first entity, 1 for second entity
+
+                    #TODO: fix dimensions bug: number of tokens of the first entity != number of tokens of the second entity AND not necseerily integer divided
+                    batch_idx = torch.arange(bs)[:, None, None, None].expand(bs, num_heads, max_indices, max_indices)
+                    head_idx = torch.arange(num_heads)[None, :, None, None].expand(bs, num_heads, max_indices, max_indices)
+                    first_idx = first_entity_sorted_indices[:, :, :, None].expand(bs, num_heads, first_entity_sorted_indices.shape[-1], first_entity_sorted_indices.shape[-1])
+                    # first_idx = first_entity_sorted_indices[:, :, :, None].repeat(1, 1, 1, max_indices).expand(bs, num_heads, first_entity_sorted_indices.shape[-1], max_indices)
+                    second_idx = second_entity_sorted_indices[:, :, None, :].expand(bs, num_heads, second_entity_sorted_indices.shape[-1], second_entity_sorted_indices.shape[-1])
+                    
+                    # padd with repeated indices
+                    
+                    repeated_value = first_idx[:, :, 0, 0].unsqueeze(-1).unsqueeze(-1)  # Shape: [2, 24, 1, 1]
+                    padded_idx = repeated_value.repeat(1, 1, max_indices, max_indices)  # Shape: [2, 24, k, k]
+                    valid_shape = min_indices 
+                    # padded_idx = torch.full((bs, num_heads, max_indices, max_indices), float('inf'))
+                    if arg_min_entity == 0:
+                        # Copy `first_idx` into the padded tensor
+                        padded_idx[:, :, :valid_shape, :valid_shape] = first_idx
+                        first_idx = padded_idx
+                        # valid_mask = (~torch.isinf(first_idx))
+                    else:
+                        padded_idx[:, :, :valid_shape, :valid_shape] = second_idx
+                        second_idx = padded_idx
+                        # valid_mask = (~torch.isinf(second_idx))
+
+                    # valid_batch_idx = batch_idx[valid_mask]
+                    # valid_head_idx = head_idx[valid_mask]
+                    # valid_first_idx = first_idx[valid_mask].long()
+                    # valid_second_idx = second_idx[valid_mask].long()
+
+                    # relevant_im2im_vals = attn_weight[valid_batch_idx, valid_head_idx, valid_first_idx, valid_second_idx]
+                    # image_to_image_attention_high_indices = torch.full_like(attn_weight, -torch.inf)
+                    # image_to_image_attention_high_indices[valid_batch_idx, valid_head_idx, valid_first_idx, valid_second_idx] = relevant_im2im_vals
+                                        
 
                     # Index into attn_weight
                     image_to_image_attention_high_indices = torch.full_like(attn_weight, -torch.inf)
@@ -2055,89 +2099,14 @@ class FluxAttnProcessor2_0:
                         for h in range(num_heads):
                             mask[b, h, row_select[b, h], col_select[b, h]] = 0
 
-                    # Create batch/head indices
-                    # batch_indices = torch.arange(bs)[:,None,None].expand(bs, num_heads, top_k_image_image_indices)
-                    # head_indices = torch.arange(num_heads)[None,:,None].expand(bs, num_heads, top_k_image_image_indices)
-
-                    # Extract correct indices using row/col indices directly
-                    # row_select = row_indices.unsqueeze(-1)    # [bs,num_heads,150,1]
-                    # col_select = col_indices.unsqueeze(-1)    # [bs,num_heads,150,1]
-                    
-                    # # Set mask values
-                    # for b in range(bs):
-                    #     for h in range(num_heads):
-                    #         mask[b,h,row_select[b,h],col_select[b,h]] = 0
-
-                    # # make average of the for each head (seperately for each batch)
-                    # for b in range(bs):
-                    #     average_for_batch = torch.mean(attn_weight[b], dim=0)
-                    #     save_attention_weights_as_heatmap(average_for_batch, f"{plots_folder}/{first_entity_index}_{second_entity_index}_{b}_average")
-
 
 
                     # Apply mask
-                    mask = mask.to('cuda')
+                    mask = mask.to(hidden_states.device)
                     attn_weight = attn_weight * mask
-                    # Create batch/head index tensors that match row/col indices shape [bs,num_heads,k]
-                    # batch_indices = torch.arange(bs)[:,None,None].expand_as(row_indices)
-                    # head_indices = torch.arange(num_heads)[None,:,None].expand_as(row_indices)
-                    
-                    # # Zero out the values using advanced indexing
-                    # attn_weight[batch_indices, head_indices, 
-                    #             first_idx[batch_indices, head_indices, row_indices], 
-                    #             second_idx[batch_indices, head_indices, col_indices]] = 0
 
-                    # mask = torch.zeros_like(attn_weight)
-                    # mask[batch_indices, head_indices, 
-                    #      first_idx[batch_indices, head_indices, row_indices], 
-                    #      second_idx[batch_indices, head_indices, col_indices]] = 1
-                    # for head in range(4):
-                    #     save_attention_weights_as_heatmap(mask[1, head], f"{plots_folder}/{first_entity_index}_{second_entity_index}_{head}_mask")
-
-
-
-            
-            # print('Editing attention map based on sorted indices')
-            # for curr_batch in range(attn_weight.shape[0]):
-            #     for curr_head in range(attn_weight.shape[1]):
-            #         for token_entity_index, sorted_indices in image_latent_topk_indices_per_token_entity.items():
-            #             for token_entity_index2, sorted_indices2 in image_latent_topk_indices_per_token_entity.items():
-                        
-            #                 if token_entity_index == token_entity_index2:
-            #                     continue
-            #                 sorted_indices_dim_3 = sorted_indices["dim_3"]
-            #                 sorted_indices2_dim_3 = sorted_indices2["dim_3"]
-
-            #                 image_att_1_with_original_indices = [(sorted_indices_dim_3[i], sorted_indices2_dim_3[j], image_att_weights[curr_batch, curr_head,i, j]) for i in range(top_k_text_image_indices) for j in range(top_k_text_image_indices)]
-            #                 image_att_2_with_original_indices = [(sorted_indices2_dim_3[i], sorted_indices_dim_3[j], image_att_weights[curr_batch, curr_head,i, j]) for i in range(top_k_text_image_indices) for j in range(top_k_text_image_indices)]
-            #                 # image_att_1_with_original_indices = sorted(image_att_1_with_original_indices, key=lambda x: x[2], reverse=True)
-            #                 # image_att_2_with_original_indices = sorted(image_att_2_with_original_indices, key=lambda x: x[2], reverse=True)
-            #                 # more efficient way to sort - just take the top_k_image_image_indices
-            #                 image_att_1_values = torch.tensor([x[2] for x in image_att_1_with_original_indices])
-            #                 _, top_indices = torch.topk(image_att_1_values, top_k_image_image_indices)
-            #                 top_image_indices_1 = [image_att_2_with_original_indices[i] for i in top_indices]
-
-            #                 image_att_2_values = torch.tensor([x[2] for x in image_att_2_with_original_indices])
-            #                 _, top_indices = torch.topk(image_att_2_values, top_k_image_image_indices)
-            #                 top_image_indices_2 = [image_att_2_with_original_indices[i] for i in top_indices]
-
-            #                 # top_image_indices_1 = image_att_1_with_original_indices[:top_k_image_image_indices]
-            #                 # top_image_indices_2 = image_att_2_with_original_indices[:top_k_image_image_indices]
-
-                            # edit original attention map
-                            # first_entity_indices = [x[0] for x in top_image_indices_1]
-                            # second_entity_indices = [x[1] for x in top_image_indices_2]
-                            # attn_weight[curr_batch, curr_head, first_entity_indices, second_entity_indices] = 0
-                            # attn_weight[curr_batch, curr_head, second_entity_indices, first_entity_indices] = 0
-                            # curr_attn_weight = attn_weight[curr_batch, curr_head]
-                            # # make a heatmap with 1s in the indices that are set to 0 and 0s elsewhere
-                            # attn_weight_to_plot = torch.zeros_like(curr_attn_weight)
-                            # attn_weight_to_plot[first_entity_indices, second_entity_indices] = 1
-                            # attn_weight_to_plot[second_entity_indices, first_entity_indices] = 1
-                            # save_attention_weights_as_heatmap(attn_weight_to_plot, f"{plots_folder}/{token_entity_index}_{token_entity_index2}_{curr_batch}_{curr_head}_heatmap")
-            # print('Finished editing attention map based on sorted indices')
             hidden_states = attn_weight @ value
-            hidden_states = hidden_states.to('cuda')
+            hidden_states = hidden_states.to(hidden_states.device)
 
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
