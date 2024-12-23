@@ -567,6 +567,11 @@ class FluxPipeline(
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
+        # token_entity_indices=None,
+        # top_k_text_image_indices=None,
+        # top_k_image_image_indices=None,
+        # deleaker=None,
+        deleaker_kwargs={}
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -637,7 +642,7 @@ class FluxPipeline(
             is True, otherwise a `tuple`. When returning a tuple, the first element is a list with the generated
             images.
         """
-
+        print("Using deleaker version")
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 
@@ -745,6 +750,11 @@ class FluxPipeline(
                     img_ids=latent_image_ids,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
+                    deleaker_kwargs=deleaker_kwargs
+                    # token_entity_indices=token_entity_indices,
+                    # top_k_text_image_indices=top_k_text_image_indices,
+                    # top_k_image_image_indices=top_k_image_image_indices,
+                    # deleaker=deleaker,
                 )[0]
 
                 # compute the previous noisy sample x_t -> x_t-1

@@ -19,6 +19,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import tqdm
 
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders import FromOriginalModelMixin, PeftAdapterMixin
@@ -88,12 +89,19 @@ class FluxSingleTransformerBlock(nn.Module):
         hidden_states: torch.FloatTensor,
         temb: torch.FloatTensor,
         image_rotary_emb=None,
+        # token_entity_indices=None,
+        # top_k_text_image_indices=None,
+        # top_k_image_image_indices=None,
+        # deleaker=None,
         joint_attention_kwargs=None,
+        deleaker_kwargs={}
     ):
         residual = hidden_states
         norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
         mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
         joint_attention_kwargs = joint_attention_kwargs or {}
+        # merge joint_attention_kwargs and deleaker_kwargs into joint_attention_kwargs
+        joint_attention_kwargs['deleaker_kwargs'] = deleaker_kwargs
         attn_output = self.attn(
             hidden_states=norm_hidden_states,
             image_rotary_emb=image_rotary_emb,
@@ -169,18 +177,29 @@ class FluxTransformerBlock(nn.Module):
         temb: torch.FloatTensor,
         image_rotary_emb=None,
         joint_attention_kwargs=None,
+        # token_entity_indices=None,
+        # top_k_text_image_indices=None,
+        # top_k_image_image_indices=None,
+        # deleaker=None,
+        deleaker_kwargs={}
     ):
+        # top_k_text_image_indices = deleaker_kwargs.get("top_k_text_image_indices", None)
+        # top_k_image_image_indices = deleaker_kwargs.get("top_k_image_image_indices", None)
+        # deleaker = deleaker_kwargs.get("deleaker", None)
+        # token_entity_indices = deleaker_kwargs.get("token_entity_indices", None)
         norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
 
         norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
             encoder_hidden_states, emb=temb
         )
         joint_attention_kwargs = joint_attention_kwargs or {}
+        joint_attention_kwargs['deleaker_kwargs'] = deleaker_kwargs
         # Attention.
         attn_output, context_attn_output = self.attn(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=norm_encoder_hidden_states,
             image_rotary_emb=image_rotary_emb,
+            # deleaker_kwargs=deleaker_kwargs,
             **joint_attention_kwargs,
         )
 
@@ -409,6 +428,11 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         controlnet_single_block_samples=None,
         return_dict: bool = True,
         controlnet_blocks_repeat: bool = False,
+        # token_entity_indices=None,
+        # top_k_text_image_indices=None,
+        # top_k_image_image_indices=None,
+        # deleaker=None,
+        deleaker_kwargs = {}
     ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
         """
         The [`FluxTransformer2DModel`] forward method.
@@ -436,6 +460,11 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
             If `return_dict` is True, an [`~models.transformer_2d.Transformer2DModelOutput`] is returned, otherwise a
             `tuple` where the first element is the sample tensor.
         """
+        # token_entity_indices = deleaker_kwargs.get("token_entity_indices", None)
+        # top_k_text_image_indices = deleaker_kwargs.get("top_k_text_image_indices", None)
+        # top_k_image_image_indices = deleaker_kwargs.get("top_k_image_image_indices", None)
+        # deleaker = deleaker_kwargs.get("deleaker", None)
+
         if joint_attention_kwargs is not None:
             joint_attention_kwargs = joint_attention_kwargs.copy()
             lora_scale = joint_attention_kwargs.pop("scale", 1.0)
@@ -482,7 +511,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         ids = torch.cat((txt_ids, img_ids), dim=0)
         image_rotary_emb = self.pos_embed(ids)
 
-        for index_block, block in enumerate(self.transformer_blocks):
+        for index_block, block in enumerate(self.transformer_blocks): # 19
             if torch.is_grad_enabled() and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):
@@ -510,6 +539,11 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     encoder_hidden_states=encoder_hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
+                    deleaker_kwargs=deleaker_kwargs,
+                    # deleaker=deleaker,
+                    # token_entity_indices=token_entity_indices,
+                    # top_k_text_image_indices=top_k_text_image_indices,
+                    # top_k_image_image_indices=top_k_image_image_indices,
                     joint_attention_kwargs=joint_attention_kwargs,
                 )
 
@@ -527,7 +561,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
 
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
-        for index_block, block in enumerate(self.single_transformer_blocks):
+        for index_block, block in enumerate(self.single_transformer_blocks): # 38
             if torch.is_grad_enabled() and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):
@@ -553,6 +587,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     hidden_states=hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
+                    deleaker_kwargs=deleaker_kwargs,
                     joint_attention_kwargs=joint_attention_kwargs,
                 )
 
