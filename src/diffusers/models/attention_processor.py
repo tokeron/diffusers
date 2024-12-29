@@ -1989,6 +1989,7 @@ class FluxAttnProcessor2_0:
 
             bs, num_heads, _, _ = attn_weight.shape
 
+
             # Dictionary to store the sorted indices of the self-attention 
             # between each entity and all the image latent tokens
             image_latent_topk_indices_per_token_per_entity = {
@@ -2018,7 +2019,18 @@ class FluxAttnProcessor2_0:
                 #     'image_query_entity_key': set(topk_indices_image_query_entity_key),
                 # }
 
+                            # statistics dictionary
+            stats_deleaker = {}
+            for i, entity in enumerate(token_entity_indices.keys()):
+                stats_deleaker[f'entity_{i}'] = entity
+                stats_deleaker[f'entity_{i}_subtokens'] = token_entity_indices[entity]
+                # currently with top-k - it is not relevant.
+                stats_deleaker[f'entity_{i}_avg_num_top_image_latent_tokens'] = image_latent_top_indices_per_entity[entity].shape[-1] / len(token_entity_indices[entity])
+
+            
+            index_first_entity = 0 # for stats only
             for first_entity, first_entity_sorted_indices in image_latent_top_indices_per_entity.items():
+                index_second_entity = 0
                 for second_entity, second_entity_sorted_indices in image_latent_top_indices_per_entity.items():
                     if first_entity == second_entity:
                         continue
@@ -2105,6 +2117,14 @@ class FluxAttnProcessor2_0:
                     mask = mask.to(hidden_states.device)
                     attn_weight = attn_weight * mask
 
+                    # stats
+                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = flat_indices.shape[-1]
+
+                    index_second_entity += 1
+                index_first_entity += 1
+
+            deleaker_kwargs['stats_deleaker'] = stats_deleaker
+            
             hidden_states = attn_weight @ value
             hidden_states = hidden_states.to(hidden_states.device)
 

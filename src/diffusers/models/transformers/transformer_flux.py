@@ -547,6 +547,15 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     joint_attention_kwargs=joint_attention_kwargs,
                 )
 
+                # ------- mor stats --------
+                if deleaker_kwargs.get('stats_deleaker', {}):
+                    deleaker_stats = deleaker_kwargs['stats_deleaker']
+                    ts_deleaker = timestep.cpu()
+                    deleaker_kwargs[f'timestep_{ts_deleaker.tolist()}_block_id_ {index_block}_block_type_{str(type(block).__name__)}'] = deleaker_stats
+                    # drop the stats
+                    deleaker_kwargs['stats_deleaker'] = {}
+                    
+
             # controlnet residual
             if controlnet_block_samples is not None:
                 interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
