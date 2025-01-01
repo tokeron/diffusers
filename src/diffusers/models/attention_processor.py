@@ -2003,7 +2003,7 @@ class FluxAttnProcessor2_0:
                     image_query_entity_key_vector = attn_weight[:, :, num_text_tokens:, token_entity_index] # image as query, text as key 
                     # image_key_entity_query_vector = attn_weight[:, :, curr_token_entity_index, num_text_tokens:] # image as key, text as query
                     # TODO - move this outside
-                    top = 'topp'
+                    top = 'topk'
                     top_p = top_k_text_image_indices
                     def get_top_p_indices(vector, top_p):
                         # Convert to float32 for higher precision
@@ -2197,10 +2197,10 @@ class FluxAttnProcessor2_0:
                     # Apply mask
                     mask = mask.to(hidden_states.device)
                     attn_weight = attn_weight * mask
-                    attn_weight = torch.softmax(attn_weight, dim=-1)
+                    # attn_weight = torch.softmax(attn_weight, dim=-1)
 
-                    # stats
-                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = flat_indices.shape[-1]
+                    # stats: average per batch and head 
+                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = (mask.flatten().shape[-1] - mask.count_nonzero()) / (mask.shape[0]* mask.shape[1])
 
                     index_second_entity += 1
                 index_first_entity += 1
