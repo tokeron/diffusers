@@ -511,7 +511,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         ids = torch.cat((txt_ids, img_ids), dim=0)
         image_rotary_emb = self.pos_embed(ids)
 
-        for index_block, block in enumerate(self.transformer_blocks): # 19
+        for index_block, block in tqdm.tqdm(enumerate(self.transformer_blocks), desc="Transformer Blocks"): # 19
             if torch.is_grad_enabled() and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):
@@ -570,7 +570,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
 
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
-        for index_block, block in enumerate(self.single_transformer_blocks): # 38
+        for index_block, block in tqdm.tqdm(enumerate(self.single_transformer_blocks), desc="Single Transformer Blocks"): # 38
             if torch.is_grad_enabled() and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):

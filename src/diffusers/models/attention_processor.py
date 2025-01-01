@@ -1884,10 +1884,6 @@ class FluxAttnProcessor2_0:
         attention_mask: Optional[torch.FloatTensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
         deleaker_kwargs={},
-        # deleaker: bool = False,
-        # token_entity_indices: List[int] = [],
-        # top_k_text_image_indices: int = 10,
-        # top_k_image_image_indices: int = 20,
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         deleaker = deleaker_kwargs.get("deleaker", False)
@@ -1979,13 +1975,14 @@ class FluxAttnProcessor2_0:
                 attn_bias = attn_bias.to(attn_weight.device)
                 attn_weight += attn_bias
                 attn_weight = torch.softmax(attn_weight, dim=-1)
-                attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+                # attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
                 return attn_weight #  @ value (original code)
 
             attn_weight = scaled_dot_product_attention_att_weight(query, key, value, dropout_p=0.0, is_causal=False)
             # save as heatmap - before any intervention
 
-            num_text_tokens = 256 # encoder_hidden_states_query_proj.shape[2] # TODO move outside
+            num_text_tokens = deleaker_kwargs.get('num_text_tokens', 256) # TODO - add outside the num_text_tokens
+
 
             bs, num_heads, _, _ = attn_weight.shape
 
@@ -2005,21 +2002,53 @@ class FluxAttnProcessor2_0:
                 for token_entity_index in curr_token_entity_indices: # for token
                     image_query_entity_key_vector = attn_weight[:, :, num_text_tokens:, token_entity_index] # image as query, text as key 
                     # image_key_entity_query_vector = attn_weight[:, :, curr_token_entity_index, num_text_tokens:] # image as key, text as query
-                    _, topk_indices_image_query_entity_key = torch.topk(image_query_entity_key_vector, top_k_text_image_indices)
+                    # TODO - move this outside
+                    top = 'topp'
+                    top_p = top_k_text_image_indices
+                    def get_top_p_indices(vector, top_p):
+                        # Convert to float32 for higher precision
+                        vector_high_precision = vector.to(torch.float32)
+
+                        # Step 1: Convert values to probabilities using softmax
+                        probabilities = torch.nn.functional.softmax(vector_high_precision, dim=-1)
+
+                        # Step 2: Sort the probabilities in descending order
+                        sorted_probs, sorted_indices = torch.sort(probabilities, descending=True, dim=-1)
+
+                        # Step 3: Accumulate the sorted probabilities until the sum reaches or exceeds top p%
+                        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                        mask = cumulative_probs <= top_p
+
+                        # Step 4: Select the corresponding indices
+                        top_p_indices = sorted_indices * mask
+                        top_p_indices = top_p_indices[..., :vector.size(-1)] # TODO look into this line
+
+                        # Step 5: Repeat the first value to maintain the tensor shape
+                        first_value = top_p_indices[..., 0:1]
+                        top_p_indices = torch.cat([top_p_indices, first_value.expand_as(top_p_indices)], dim=-1)
+
+                        return top_p_indices
+
+                    if top == 'topk':
+                        top_k_text_image_indices = 150
+                        # print(f'Using top-k {top_k_text_image_indices} in text-image  attention')
+                        _, topk_indices_image_query_entity_key = torch.topk(image_query_entity_key_vector, top_k_text_image_indices)
+                    else: # top == 'topp'
+                        topk_indices_image_query_entity_key = get_top_p_indices(image_query_entity_key_vector, top_p)
+
                     topk_indices_image_query_entity_key += num_text_tokens # Important: relative to the image latent tokens start
                     image_latent_topk_indices_per_token_per_entity[curr_entity][token_entity_index] = topk_indices_image_query_entity_key
-
                     image_query_entity_key_list.append(topk_indices_image_query_entity_key)
 
-                # combining (union) all the top-k indices of all the subtokens for each entity
-                image_query_entity_key_tensor =  torch.stack(image_query_entity_key_list, dim=-1)
-                image_latent_top_indices_per_entity[curr_entity] = image_query_entity_key_tensor.view(image_query_entity_key_tensor.shape[0], image_query_entity_key_tensor.shape[1], -1)
+                    # combining (union) all the top-k indices of all the subtokens for each entity
+                    image_query_entity_key_tensor =  torch.stack(image_query_entity_key_list, dim=-1)
+                    image_latent_top_indices_per_entity[curr_entity] = image_query_entity_key_tensor.view(image_query_entity_key_tensor.shape[0], image_query_entity_key_tensor.shape[1], -1)
 
                 # image_latent_topk_indices_per_token_entity[curr_entity] = {
                 #     'image_query_entity_key': set(topk_indices_image_query_entity_key),
                 # }
 
-                            # statistics dictionary
+            # statistics dictionary
             stats_deleaker = {}
             for i, entity in enumerate(token_entity_indices.keys()):
                 stats_deleaker[f'entity_{i}'] = entity
@@ -2079,43 +2108,96 @@ class FluxAttnProcessor2_0:
                                         
 
                     # Index into attn_weight
-                    image_to_image_attention_high_indices = torch.full_like(attn_weight, -torch.inf)
+
+                    image_to_image_attention_high_indices = torch.full_like(attn_weight, -torch.inf) # torch.zeros_like(attn_weight) # was torch.full_like(attn_weight, -torch.inf) but it would not work with the softmax
                     image_to_image_attention_high_indices[batch_idx, head_idx, first_idx, second_idx] = attn_weight[batch_idx, head_idx, first_idx, second_idx]
 
                     # _, tok_k_indices_first_entity_image_key_second_entity_image_value = torch.topk(image_to_image_attention_high_indices, top_k_image_image_indices)
                     
                     # Reshape to flatten last two dimensions
                     flattened = image_to_image_attention_high_indices.reshape(bs, num_heads, -1)
+                    top = 'topp'
+                    if top == 'topk':
+                        # Get top-k values and flattened indices
+                        print(f'Using top-k {top_k_image_image_indices} in image-image attention')
+                        values, flat_indices = torch.topk(flattened, k=top_k_image_image_indices, dim=-1)
+                    else:
+                        def get_top_p_indices(flattened, top_p):
+                            # convert to float32 for higher precision
+                            flattened = flattened.to(torch.float32)
 
+                            # Step 1: Convert values to probabilities using softmax
+                            probabilities = torch.nn.functional.softmax(flattened, dim=-1)
 
-                    # Get top-k values and flattened indices
-                    values, flat_indices = torch.topk(flattened, k=top_k_image_image_indices, dim=-1)
+                            # Step 2: Sort the probabilities in descending order
+                            sorted_probs, sorted_indices = torch.sort(probabilities, descending=True, dim=-1)
+
+                            # Step 3: Accumulate the sorted probabilities until the sum reaches or exceeds top p%
+                            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                            mask = cumulative_probs <= top_p
+                            mask[..., 0] = True  # Ensure at least one value is selected
+
+                            # Step 4: Select the corresponding indices
+                            top_p_indices = sorted_indices * mask
+
+                            # TODO - maybe replace the 0 with a valid value - for example, the first value for each batch, head
+
+                            # top_p_indices = top_p_indices[..., :flattened.size(-1)]
+
+                            # Step 5: Repeat the last value to maintain the tensor shape
+                            # last_value = top_p_indices[..., -1:]
+                            # top_p_indices = torch.cat([top_p_indices, last_value.expand_as(top_p_indices)], dim=-1)
+                            
+                            return top_p_indices
+
+                        top_p = top_k_image_image_indices
+                        flat_indices = get_top_p_indices(flattened, top_p)
+
                     # mean_value_top_k_image_image_indices = torch.mean(values, dim=-1)
                     # print(f"Mean value of top k image-image indices: {mean_value_top_k_image_image_indices}")
                     # overall_mean = torch.mean(flattened, dim=-1)
                     # print(f"Overall mean: {overall_mean}")
 
+                    # lets create a heatmap of the
+
                     # Convert flat indices back to 2D indices
-                    row_indices = flat_indices // attn_weight.shape[-1]
-                    col_indices = flat_indices % attn_weight.shape[-1]
+                    # row_indices = flat_indices // attn_weight.shape[-1]
+                    # col_indices = flat_indices % attn_weight.shape[-1]
 
-                    # Create mask of ones
-                    mask = torch.ones_like(attn_weight) #.cpu()
+                    # # Create mask of ones
+                    # mask = torch.ones_like(attn_weight) #.cpu()
 
-                    # Extract correct indices using row/col indices directly
-                    row_select = row_indices.unsqueeze(-1)    # [bs,num_heads,x,1]
-                    col_select = col_indices.unsqueeze(-1)    # [bs,num_heads,x,1]
+                    # # Extract correct indices using row/col indices directly
+                    # row_select = row_indices.unsqueeze(-1)    # [bs,num_heads,x,1]
+                    # col_select = col_indices.unsqueeze(-1)    # [bs,num_heads,x,1]
 
-                    # Set mask values
-                    for b in range(bs):
-                        for h in range(num_heads):
-                            mask[b, h, row_select[b, h], col_select[b, h]] = 0
+                    # # Set mask values
+                    # for b in range(bs):
+                    #     for h in range(num_heads):
+                    #         mask[b, h, row_select[b, h], col_select[b, h]] = 0
 
+                    
+                    # New code - instead of the above two for loops - to set the mask values according to the flat indices directly
+                    # Shape of image_to_image_attention_high_indices: (bs, num_heads, height, width)
+                    original_shape = image_to_image_attention_high_indices.shape  # (bs, num_heads, height, width)
+
+                    # Create a zero mask with the same shape
+                    mask = torch.ones_like(image_to_image_attention_high_indices, dtype=torch.bool)
+
+                    # Reshape the mask to match the flattened shape
+                    mask_flattened = mask.reshape(bs, num_heads, -1)
+
+                    # Use flat_indices to set the corresponding positions to 1 (True)
+                    mask_flattened.scatter_(dim=-1, index=flat_indices, value=False)
+
+                    # Reshape the mask back to the original shape
+                    mask = mask_flattened.reshape(original_shape)
 
 
                     # Apply mask
                     mask = mask.to(hidden_states.device)
                     attn_weight = attn_weight * mask
+                    attn_weight = torch.softmax(attn_weight, dim=-1)
 
                     # stats
                     stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = flat_indices.shape[-1]
