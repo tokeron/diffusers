@@ -1974,7 +1974,7 @@ class FluxAttnProcessor2_0:
                 attn_weight = query @ key.transpose(-2, -1) * scale_factor
                 attn_bias = attn_bias.to(attn_weight.device)
                 attn_weight += attn_bias
-                attn_weight = torch.softmax(attn_weight, dim=-1)
+                # attn_weight = torch.softmax(attn_weight, dim=-1)
                 # attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
                 return attn_weight #  @ value (original code)
 
@@ -2003,7 +2003,7 @@ class FluxAttnProcessor2_0:
                     image_query_entity_key_vector = attn_weight[:, :, num_text_tokens:, token_entity_index] # image as query, text as key 
                     # image_key_entity_query_vector = attn_weight[:, :, curr_token_entity_index, num_text_tokens:] # image as key, text as query
                     # TODO - move this outside
-                    top = 'topp'
+                    top = 'topk'
                     top_p = top_k_text_image_indices
                     def get_top_p_indices(vector, top_p):
                         # Convert to float32 for higher precision
@@ -2109,8 +2109,8 @@ class FluxAttnProcessor2_0:
 
                     # Index into attn_weight
 
-                    image_to_image_attention_high_indices = torch.full_like(attn_weight, -torch.inf) # torch.zeros_like(attn_weight) # was torch.full_like(attn_weight, -torch.inf) but it would not work with the softmax
-                    image_to_image_attention_high_indices[batch_idx, head_idx, first_idx, second_idx] = attn_weight[batch_idx, head_idx, first_idx, second_idx]
+                    image_to_image_attention_high_indices = torch.full_like(attn_weight, -torch.inf).cpu() # torch.zeros_like(attn_weight) # was torch.full_like(attn_weight, -torch.inf) but it would not work with the softmax
+                    image_to_image_attention_high_indices[batch_idx, head_idx, first_idx, second_idx] = attn_weight[batch_idx, head_idx, first_idx, second_idx].cpu()
 
                     # _, tok_k_indices_first_entity_image_key_second_entity_image_value = torch.topk(image_to_image_attention_high_indices, top_k_image_image_indices)
                     
@@ -2182,13 +2182,15 @@ class FluxAttnProcessor2_0:
                     original_shape = image_to_image_attention_high_indices.shape  # (bs, num_heads, height, width)
 
                     # Create a zero mask with the same shape
-                    mask = torch.ones_like(image_to_image_attention_high_indices, dtype=torch.bool)
+                    # mask = torch.ones_like(image_to_image_attention_high_indices, dtype=torch.bool)
+
+                    mask = torch.zeros_like(image_to_image_attention_high_indices, dtype=torch.bfloat16)
 
                     # Reshape the mask to match the flattened shape
                     mask_flattened = mask.reshape(bs, num_heads, -1)
 
                     # Use flat_indices to set the corresponding positions to 1 (True)
-                    mask_flattened.scatter_(dim=-1, index=flat_indices, value=False)
+                    mask_flattened.scatter_(dim=-1, index=flat_indices, value=float('-inf'))
 
                     # Reshape the mask back to the original shape
                     mask = mask_flattened.reshape(original_shape)
@@ -2196,17 +2198,21 @@ class FluxAttnProcessor2_0:
 
                     # Apply mask
                     mask = mask.to(hidden_states.device)
-                    attn_weight = attn_weight * mask
-                    attn_weight = torch.softmax(attn_weight, dim=-1)
+                    attn_weight = attn_weight + mask
+
+                    # attn_weight = attn_weight * mask
 
                     # stats
-                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = flat_indices.shape[-1]
+                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = mask.sum() / flat_indices.shape[-1]
 
                     index_second_entity += 1
                 index_first_entity += 1
-
+            
             deleaker_kwargs['stats_deleaker'] = stats_deleaker
             
+            # Michael - added here to be computed only once
+            attn_weight = torch.softmax(attn_weight, dim=-1)
+
             hidden_states = attn_weight @ value
             hidden_states = hidden_states.to(hidden_states.device)
 
