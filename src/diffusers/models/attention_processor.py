@@ -2199,11 +2199,12 @@ class FluxAttnProcessor2_0:
                     # Apply mask
                     mask = mask.to(hidden_states.device)
                     attn_weight = attn_weight + mask
-
-                    # attn_weight = attn_weight * mask
-
                     # stats
-                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = mask.sum() / flat_indices.shape[-1]
+                    # stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = mask.sum() / flat_indices.shape[-1]
+                    # attn_weight = attn_weight * mask
+                    # attn_weight = torch.softmax(attn_weight, dim=-1)
+                    # stats: average per batch and head 
+                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = (mask.flatten().shape[-1] - mask.count_nonzero()) / (mask.shape[0]* mask.shape[1])
 
                     index_second_entity += 1
                 index_first_entity += 1
