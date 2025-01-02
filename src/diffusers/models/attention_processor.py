@@ -1888,8 +1888,11 @@ class FluxAttnProcessor2_0:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         deleaker = deleaker_kwargs.get("deleaker", False)
         token_entity_indices = deleaker_kwargs.get("token_entity_indices", [])
-        top_k_text_image_indices = deleaker_kwargs.get("top_k_text_image_indices", 10)
-        top_k_image_image_indices = deleaker_kwargs.get("top_k_image_image_indices", 20)
+        top_text_image_indices = deleaker_kwargs.get("top_text_image_indices", 10)
+        top_image_image_indices = deleaker_kwargs.get("top_image_image_indices", 20)
+        top_method_text_image = deleaker_kwargs.get("top_method_text_image", "topk")
+        top_method_image_image = deleaker_kwargs.get("top_method_image_image", "topp")
+        std_mul = deleaker_kwargs.get("std_mul", 3.45)
         
 
         plots_folder = 'deleaker_plots' # TODO move outside
@@ -2002,9 +2005,7 @@ class FluxAttnProcessor2_0:
                 for token_entity_index in curr_token_entity_indices: # for token
                     image_query_entity_key_vector = attn_weight[:, :, num_text_tokens:, token_entity_index] # image as query, text as key 
                     # image_key_entity_query_vector = attn_weight[:, :, curr_token_entity_index, num_text_tokens:] # image as key, text as query
-                    # TODO - move this outside
-                    top = 'topk'
-                    top_p = top_k_text_image_indices
+
                     def get_top_p_indices(vector, top_p):
                         # Convert to float32 for higher precision
                         vector_high_precision = vector.to(torch.float32)
@@ -2029,12 +2030,13 @@ class FluxAttnProcessor2_0:
 
                         return top_p_indices
 
-                    if top == 'topk':
-                        top_k_text_image_indices = 150
+                    if top_method_text_image == 'topk':
                         # print(f'Using top-k {top_k_text_image_indices} in text-image  attention')
-                        _, topk_indices_image_query_entity_key = torch.topk(image_query_entity_key_vector, top_k_text_image_indices)
-                    else: # top == 'topp'
-                        topk_indices_image_query_entity_key = get_top_p_indices(image_query_entity_key_vector, top_p)
+                        _, topk_indices_image_query_entity_key = torch.topk(image_query_entity_key_vector, top_text_image_indices)
+                    elif top_method_text_image == 'topp':
+                        topk_indices_image_query_entity_key = get_top_p_indices(image_query_entity_key_vector, top_text_image_indices)
+                    else:
+                        raise ValueError(f'Invalid top method for text image: {top_method_text_image}')
 
                     topk_indices_image_query_entity_key += num_text_tokens # Important: relative to the image latent tokens start
                     image_latent_topk_indices_per_token_per_entity[curr_entity][token_entity_index] = topk_indices_image_query_entity_key
@@ -2116,13 +2118,13 @@ class FluxAttnProcessor2_0:
                     
                     # Reshape to flatten last two dimensions
                     flattened = image_to_image_attention_high_indices.reshape(bs, num_heads, -1)
-                    top = 'threshold'
-                    if top == 'topk':
+                    
+                    if top_method_image_image == 'topk':
                         # Get top-k values and flattened indices
-                        print(f'Using top-k {top_k_image_image_indices} in image-image attention')
-                        values, flat_indices = torch.topk(flattened, k=top_k_image_image_indices, dim=-1)
+                        print(f'Using top-k {top_image_image_indices} in image-image attention')
+                        values, flat_indices = torch.topk(flattened, k=top_image_image_indices, dim=-1)
                         mask = None
-                    elif top == 'topp':
+                    elif top_method_image_image == 'topp':
                         def get_top_p_indices(flattened, top_p):
                             # convert to float32 for higher precision
                             flattened = flattened.to(torch.float32)
@@ -2151,11 +2153,9 @@ class FluxAttnProcessor2_0:
                             
                             return top_p_indices
 
-                        top_p = top_k_image_image_indices
-                        flat_indices = get_top_p_indices(flattened, top_p)
+                        flat_indices = get_top_p_indices(flattened, top_image_image_indices)
                         mask = None
-                    elif top == 'threshold':
-                        std_mul = 3.45
+                    elif top_method_image_image == 'threshold':
                         flattened_no_inf = flattened.clone()
                         # Create a mask where values are not -inf
                         m_inf_mask = flattened_no_inf != float('-inf')
@@ -2167,7 +2167,7 @@ class FluxAttnProcessor2_0:
                         mask = flattened > threshold.unsqueeze(-1)
                         # print("mean mask: ", mask.sum() / bs * num_heads)
                     else:
-                        raise ValueError(f"Invalid top selection method: {top}")
+                        raise ValueError(f"Invalid top selection method: {top_method_image_image}")
 
                     # mean_value_top_k_image_image_indices = torch.mean(values, dim=-1)
                     # print(f"Mean value of top k image-image indices: {mean_value_top_k_image_image_indices}")
