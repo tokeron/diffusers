@@ -2109,19 +2109,20 @@ class FluxAttnProcessor2_0:
 
                     # Index into attn_weight
 
-                    image_to_image_attention_high_indices = torch.full_like(attn_weight, -torch.inf).cpu() # torch.zeros_like(attn_weight) # was torch.full_like(attn_weight, -torch.inf) but it would not work with the softmax
-                    image_to_image_attention_high_indices[batch_idx, head_idx, first_idx, second_idx] = attn_weight[batch_idx, head_idx, first_idx, second_idx].cpu()
+                    image_to_image_attention_high_indices = torch.full_like(attn_weight, -torch.inf)  # torch.zeros_like(attn_weight) # was torch.full_like(attn_weight, -torch.inf) but it would not work with the softmax
+                    image_to_image_attention_high_indices[batch_idx, head_idx, first_idx, second_idx] = attn_weight[batch_idx, head_idx, first_idx, second_idx]
 
                     # _, tok_k_indices_first_entity_image_key_second_entity_image_value = torch.topk(image_to_image_attention_high_indices, top_k_image_image_indices)
                     
                     # Reshape to flatten last two dimensions
                     flattened = image_to_image_attention_high_indices.reshape(bs, num_heads, -1)
-                    top = 'topp'
+                    top = 'threshold'
                     if top == 'topk':
                         # Get top-k values and flattened indices
                         print(f'Using top-k {top_k_image_image_indices} in image-image attention')
                         values, flat_indices = torch.topk(flattened, k=top_k_image_image_indices, dim=-1)
-                    else:
+                        mask = None
+                    elif top == 'topp':
                         def get_top_p_indices(flattened, top_p):
                             # convert to float32 for higher precision
                             flattened = flattened.to(torch.float32)
@@ -2152,6 +2153,21 @@ class FluxAttnProcessor2_0:
 
                         top_p = top_k_image_image_indices
                         flat_indices = get_top_p_indices(flattened, top_p)
+                        mask = None
+                    elif top == 'threshold':
+                        std_mul = 3.45
+                        flattened_no_inf = flattened.clone()
+                        # Create a mask where values are not -inf
+                        m_inf_mask = flattened_no_inf != float('-inf')
+                        # Filter the tensor using the mask
+                        flattened_no_inf = flattened_no_inf[m_inf_mask]
+                        mean = torch.mean(flattened_no_inf, dim=-1)
+                        std = torch.std(flattened_no_inf, dim=-1)
+                        threshold = mean + std_mul * std
+                        mask = flattened > threshold.unsqueeze(-1)
+                        # print("mean mask: ", mask.sum() / bs * num_heads)
+                    else:
+                        raise ValueError(f"Invalid top selection method: {top}")
 
                     # mean_value_top_k_image_image_indices = torch.mean(values, dim=-1)
                     # print(f"Mean value of top k image-image indices: {mean_value_top_k_image_image_indices}")
@@ -2183,22 +2199,29 @@ class FluxAttnProcessor2_0:
 
                     # Create a zero mask with the same shape
                     # mask = torch.ones_like(image_to_image_attention_high_indices, dtype=torch.bool)
+                    if mask is None:
+                        mask = torch.zeros_like(image_to_image_attention_high_indices, dtype=torch.bfloat16)
 
-                    mask = torch.zeros_like(image_to_image_attention_high_indices, dtype=torch.bfloat16)
+                        # Reshape the mask to match the flattened shape
+                        mask_flattened = mask.reshape(bs, num_heads, -1)
 
-                    # Reshape the mask to match the flattened shape
-                    mask_flattened = mask.reshape(bs, num_heads, -1)
+                        # Use flat_indices to set the corresponding positions to 1 (True)
+                        mask_flattened.scatter_(dim=-1, index=flat_indices, value=float('-inf'))
 
-                    # Use flat_indices to set the corresponding positions to 1 (True)
-                    mask_flattened.scatter_(dim=-1, index=flat_indices, value=float('-inf'))
+                        # Reshape the mask back to the original shape
+                        mask = mask_flattened.reshape(original_shape)
+                    else:
+                        # replace False with 0 and True with -inf
+                        mask = torch.where(mask, float('-inf'), mask.float())
+                        if torch.isnan(mask).sum() > 0:
+                            print("Nan in mask")
+                        mask = mask.reshape(original_shape)
 
-                    # Reshape the mask back to the original shape
-                    mask = mask_flattened.reshape(original_shape)
 
 
                     # Apply mask
                     mask = mask.to(hidden_states.device)
-                    attn_weight = attn_weight + mask
+                    attn_weight = attn_weight + mask.to(dtype=attn_weight.dtype)
                     # stats
                     # stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = mask.sum() / flat_indices.shape[-1]
                     # attn_weight = attn_weight * mask
