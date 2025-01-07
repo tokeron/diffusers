@@ -320,6 +320,7 @@ class FluxPipeline(
         pooled_prompt_embeds: Optional[torch.FloatTensor] = None,
         max_sequence_length: int = 512,
         lora_scale: Optional[float] = None,
+        lens_kwargs: Optional[Dict[str, Any]] = {},
     ):
         r"""
 
@@ -357,9 +358,14 @@ class FluxPipeline(
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
+        skip_tokens = lens_kwargs.get("skip_tokens", None) if lens_kwargs else None
+
         if prompt_embeds is None:
             prompt_2 = prompt_2 or prompt
             prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+
+            if skip_tokens is not None:
+                prompt = '' # if we skip tokens, let's ignore the prompt in CLIP - so the pooling is done on empty string so ther eis no leakage of information from the tokens we skip
 
             # We only use the pooled prompt output from the CLIPTextModel
             pooled_prompt_embeds = self._get_clip_prompt_embeds(
@@ -367,12 +373,24 @@ class FluxPipeline(
                 device=device,
                 num_images_per_prompt=num_images_per_prompt,
             )
+
             prompt_embeds = self._get_t5_prompt_embeds(
                 prompt=prompt_2,
                 num_images_per_prompt=num_images_per_prompt,
                 max_sequence_length=max_sequence_length,
                 device=device,
             )
+
+            if skip_tokens is not None:
+                empty_string = ''
+                prompt_embeds_pads = self._get_t5_prompt_embeds(
+                    prompt=empty_string,
+                    num_images_per_prompt=num_images_per_prompt,
+                    max_sequence_length=max_sequence_length,
+                    device=device,
+            )
+            # replace the skipped tokens with the empty string tokens
+            prompt_embeds[:,skip_tokens[1],:] = prompt_embeds_pads[:,skip_tokens[1],:]
 
         if self.text_encoder is not None:
             if isinstance(self, FluxLoraLoaderMixin) and USE_PEFT_BACKEND:
@@ -657,6 +675,7 @@ class FluxPipeline(
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
+        lens_kwargs: Optional[Dict[str, Any]] = {},
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -738,7 +757,7 @@ class FluxPipeline(
             is True, otherwise a `tuple`. When returning a tuple, the first element is a list with the generated
             images.
         """
-
+        print("@torch.no_grad() is removed for FluxPipeline.__call__")
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 
@@ -789,6 +808,7 @@ class FluxPipeline(
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
             lora_scale=lora_scale,
+            lens_kwargs=lens_kwargs,
         )
         if do_true_cfg:
             (
