@@ -1997,7 +1997,7 @@ class FluxAttnProcessor2_0:
                 for entity, indices in token_entity_indices.items()
             }
 
-            image_latent_top_indices_per_entity = { entity: [] for entity in token_entity_indices.keys() }
+            image_latent_top_indices_per_entity = {entity: [] for entity in token_entity_indices.keys()}
 
             # finding for each text entity, for each subtoken, the top-k image latent tokens
             for curr_entity, curr_token_entity_indices in image_latent_topk_indices_per_token_per_entity.items(): # for entity
@@ -2226,8 +2226,9 @@ class FluxAttnProcessor2_0:
                     # stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = mask.sum() / flat_indices.shape[-1]
                     # attn_weight = attn_weight * mask
                     # attn_weight = torch.softmax(attn_weight, dim=-1)
-                    # stats: average per batch and head 
-                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = (mask.flatten().shape[-1] - mask.count_nonzero()) / (mask.shape[0]* mask.shape[1])
+                    # stats: average per (batch and head) 
+                    # stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = (mask.flatten().shape[-1] - mask.count_nonzero()) / (mask.shape[0]* mask.shape[1])
+                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = (mask.count_nonzero()) / (mask.shape[0]* mask.shape[1])
 
                     index_second_entity += 1
                 index_first_entity += 1
