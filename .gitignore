@@ -176,3 +176,6 @@ tags
 
 # wandb
 wandb
+
+#pycache Mor
+__pycache__/
