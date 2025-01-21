@@ -36,6 +36,10 @@ from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline
 from .pipeline_output import FluxPipelineOutput
 
+# from ...models.attention_processor import AttentionFluxAttnProcessor2_0, AttentionFluxSingleAttnProcessor2_0
+from ...models.attention_processor import FluxAttnProcessor2_0, FluxSingleAttnProcessor2_0
+
+FluxSingleAttnProcessor2_0
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
@@ -136,6 +140,92 @@ def retrieve_timesteps(
         timesteps = scheduler.timesteps
     return timesteps, num_inference_steps
 
+# code for aggregating attention
+def register_my_attention_processors(transformer, attention_store):
+    attn_procs = {}
+    
+    for i, (name, processor) in enumerate(transformer.attn_processors.items()):
+        layer_name = ".".join(name.split(".")[:2])
+
+        if layer_name.startswith("transformer_blocks"):
+            attn_procs[name] = FluxAttnProcessor2_0(layer_name=layer_name, 
+                                                             attention_store=attention_store)
+        elif layer_name.startswith("single_transformer_blocks"):
+            attn_procs[name] = FluxAttnProcessor2_0(layer_name=layer_name, 
+                                                                   attention_store=attention_store)
+
+    transformer.set_attn_processor(attn_procs)
+
+class AttentionStore:
+    def __init__(self, save_timesteps=None):
+        if save_timesteps is None:
+            self.save_timesteps = list(range(50))
+        else:
+            self.save_timesteps = save_timesteps
+
+        self.step_store = {}
+        self.step_store_count = {}
+
+    def store_attention(self, attention_probs, step_index: int, place_in_unet: str, batch_size, num_heads):
+        text_len = attention_probs.size(-1) - 1024 # was - 4096 (64 * 64). Now 1024 is the number of image tokens
+
+        # Split batch and heads
+        # attention_probs = attention_probs.view(batch_size, num_heads, *attention_probs.shape[1:])
+
+        # Mean over the heads
+        attention_probs = attention_probs.mean(dim=1)
+
+        # Attention: image -> text
+        # TODO check if we need the transpose
+        # attention_probs_image2text = attention_probs[:, text_len:, :text_len].transpose(1,2)
+
+        attention_probs = attention_probs.transpose(1,2)
+
+        if step_index in self.save_timesteps:
+            if step_index not in self.step_store:
+                # self.step_store[step_index] = torch.zeros_like(attention_probs_image2text)
+                # add dim 0 for the blocks
+                self.step_store[step_index] = torch.zeros_like(attention_probs).unsqueeze(0)
+                self.step_store_count[step_index] = 0
+            
+            # self.step_store[step_index] += attention_probs_image2text
+            # torch.stack the attention probs to dim 0
+            self.step_store[step_index] = torch.cat([self.step_store[step_index], attention_probs.unsqueeze(0)], dim=0)
+            self.step_store_count[step_index] += 1
+
+    def aggregate_attention(self, step_indices = None):
+        if step_indices is None:
+            step_indices = list(self.step_store.keys())
+
+        attns = []
+        # for step_index in step_indices:
+            # attns.append(self.step_store[step_index] / self.step_store_count[step_index])
+        
+        # attns = torch.stack(attns, dim=0).mean(dim=0) # mean over the timesteps
+        # cat the tensors along new dim 0
+        attns = torch.stack(list(self.step_store.values()), dim=0)
+    
+        # image_tokens = attns.size(-1) - 256
+        # H = W = int(np.sqrt(image_tokens))
+        # attns = attns.view(attns.shape[0], attns.shape[1],attns.shape[2], attns.shape[3], H, W)
+        # attns = attns.view(*attns.size()[:-1], H, W)
+
+        return attns # [1,256,1024] -> [steps, blocks, 256, 2024]
+    
+    def aggregate_attention_old(self, step_indices = None):
+        if step_indices is None:
+            step_indices = list(self.step_store.keys())
+
+        attns = []
+        for step_index in step_indices:
+            attns.append(self.step_store[step_index] / self.step_store_count[step_index])
+        
+        attns = torch.stack(attns, dim=0).mean(dim=0) # mean over the timesteps
+        
+        H = W = int(np.sqrt(attns.shape[2]))
+        attns = attns.view(attns.shape[0], attns.shape[1], H, W)
+
+        return attns
 
 class FluxPipeline(
     DiffusionPipeline,
@@ -703,6 +793,9 @@ class FluxPipeline(
             latents,
         )
 
+        self.attention_store = AttentionStore()
+        register_my_attention_processors(self.transformer, self.attention_store)
+
         # 5. Prepare timesteps
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
         image_seq_len = latents.shape[1]
@@ -739,6 +832,7 @@ class FluxPipeline(
 
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
+                deleaker_kwargs["step_index"] = i
 
                 noise_pred = self.transformer(
                     hidden_states=latents,

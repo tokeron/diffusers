@@ -1868,11 +1868,37 @@ class FusedAuraFlowAttnProcessor2_0:
         else:
             return hidden_states
 
+def scaled_dot_product_attention_att_weight(query, key, value, attn_mask=None, dropout_p=0.0,
+    is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
+    L, S = query.size(-2), key.size(-2)
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    attn_bias = torch.zeros(L, S, dtype=query.dtype)
+    if is_causal:
+        assert attn_mask is None
+        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        attn_bias.to(query.dtype)
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+        else:
+            attn_bias += attn_mask
+    if enable_gqa:
+        key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+        value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_bias = attn_bias.to(attn_weight.device)
+    attn_weight += attn_bias
+    # attn_weight = torch.softmax(attn_weight, dim=-1)
+    # attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+    return attn_weight #  @ value (original code)
 
 class FluxAttnProcessor2_0:
     """Attention processor used typically in processing the SD3-like self-attention projections."""
 
-    def __init__(self):
+    def __init__(self, layer_name='', attention_store=None):
+        self.layer_name = layer_name
+        self.attention_store = attention_store
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError("FluxAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
 
@@ -1893,6 +1919,7 @@ class FluxAttnProcessor2_0:
         top_method_text_image = deleaker_kwargs.get("top_method_text_image", "topk")
         top_method_image_image = deleaker_kwargs.get("top_method_image_image", "topp")
         std_mul = deleaker_kwargs.get("std_mul", 3.45)
+        step_index = deleaker_kwargs.get("step_index", -1)
         
 
         plots_folder = 'deleaker_plots' # TODO move outside
@@ -1949,39 +1976,19 @@ class FluxAttnProcessor2_0:
             query = apply_rotary_emb(query, image_rotary_emb)
             key = apply_rotary_emb(key, image_rotary_emb)
         if not deleaker:
-            hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
+            attn_weight = scaled_dot_product_attention_att_weight(query, key, value, dropout_p=0.0, is_causal=False)
+            attn_weight_norm = attn_weight.softmax(dim=-1)
+
+            self.attention_store.store_attention(attn_weight_norm, step_index, self.layer_name, batch_size, attn.heads)
+            hidden_states = attn_weight_norm @ value
+            # hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False) # Original code
         else:
             # deleaker code
             # print("Starting deleaker code")
-            def scaled_dot_product_attention_att_weight(query, key, value, attn_mask=None, dropout_p=0.0,
-                    is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
-                L, S = query.size(-2), key.size(-2)
-                scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
-                attn_bias = torch.zeros(L, S, dtype=query.dtype)
-                if is_causal:
-                    assert attn_mask is None
-                    temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
-                    attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
-                    attn_bias.to(query.dtype)
-
-                if attn_mask is not None:
-                    if attn_mask.dtype == torch.bool:
-                        attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
-                    else:
-                        attn_bias += attn_mask
-
-                if enable_gqa:
-                    key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
-                    value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
-
-                attn_weight = query @ key.transpose(-2, -1) * scale_factor
-                attn_bias = attn_bias.to(attn_weight.device)
-                attn_weight += attn_bias
-                # attn_weight = torch.softmax(attn_weight, dim=-1)
-                # attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
-                return attn_weight #  @ value (original code)
-
             attn_weight = scaled_dot_product_attention_att_weight(query, key, value, dropout_p=0.0, is_causal=False)
+            attn_weight_norm = attn_weight.softmax(dim=-1)
+            self.attention_store.store_attention(attn_weight_norm, step_index, self.layer_name, batch_size, attn.heads)
+
             # save as heatmap - before any intervention
 
             num_text_tokens = deleaker_kwargs.get('num_text_tokens', 256) # TODO - add outside the num_text_tokens
@@ -2121,7 +2128,7 @@ class FluxAttnProcessor2_0:
                     
                     if top_method_image_image == 'topk':
                         # Get top-k values and flattened indices
-                        print(f'Using top-k {top_image_image_indices} in image-image attention')
+                        # print(f'Using top-k {top_image_image_indices} in image-image attention')
                         values, flat_indices = torch.topk(flattened, k=top_image_image_indices, dim=-1)
                         mask = None
                     elif top_method_image_image == 'topp':
@@ -2216,7 +2223,6 @@ class FluxAttnProcessor2_0:
                         if torch.isnan(mask).sum() > 0:
                             print("Nan in mask")
                         mask = mask.reshape(original_shape)
-
 
 
                     # Apply mask
@@ -5363,7 +5369,9 @@ class FluxSingleAttnProcessor2_0(FluxAttnProcessor2_0):
     Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0).
     """
 
-    def __init__(self):
+    def __init__(self, layer_name='', attention_store=None):
+        self.layer_name = layer_name
+        self.attention_store = attention_store
         deprecation_message = "`FluxSingleAttnProcessor2_0` is deprecated and will be removed in a future version. Please use `FluxAttnProcessor2_0` instead."
         deprecate("FluxSingleAttnProcessor2_0", "0.32.0", deprecation_message)
         super().__init__()
