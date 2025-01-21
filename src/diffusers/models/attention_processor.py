@@ -2064,6 +2064,7 @@ class FluxAttnProcessor2_0:
                 stats_deleaker[f'entity_{i}_subtokens'] = token_entity_indices[entity]
                 # currently with top-k - it is not relevant.
                 stats_deleaker[f'entity_{i}_avg_num_top_image_latent_tokens'] = image_latent_top_indices_per_entity[entity].shape[-1] / len(token_entity_indices[entity])
+                stats_deleaker[f'entity_{i}_top_image_latent_tokens_{step_index}_{self.layer_name}'] = image_latent_top_indices_per_entity[entity].to('cpu').numpy()
 
             
             index_first_entity = 0 # for stats only
@@ -2234,8 +2235,8 @@ class FluxAttnProcessor2_0:
                     # attn_weight = torch.softmax(attn_weight, dim=-1)
                     # stats: average per batch and head 
                     stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_num_top_image_image_tokens'] = (mask.flatten().shape[-1] - mask.count_nonzero()) / (mask.shape[0]* mask.shape[1])
-
-                    index_second_entity += 1
+                    stats_deleaker[f'entity_{index_first_entity}_entity_{index_second_entity}_top_image_image_tokens_per_batch_{step_index}_{self.layer_name}'] = mask.to('cpu')
+                    
                 index_first_entity += 1
             
             deleaker_kwargs['stats_deleaker'] = stats_deleaker
