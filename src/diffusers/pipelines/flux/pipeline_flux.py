@@ -156,6 +156,7 @@ def register_my_attention_processors(transformer, attention_store):
 
     transformer.set_attn_processor(attn_procs)
 
+
 class AttentionStore:
     def __init__(self, save_timesteps=None):
         if save_timesteps is None:
@@ -164,9 +165,12 @@ class AttentionStore:
             self.save_timesteps = save_timesteps
 
         self.step_store = {}
+        self.step_store_after_intervention = {}
+        self.step_store_text_im = {} # Aggregate the top attentions for the image tokens between the entities
+        self.step_store_im_im = {} 
         self.step_store_count = {}
 
-    def store_attention(self, attention_probs, step_index: int, place_in_unet: str, batch_size, num_heads):
+    def store_attention(self, attention_probs, step_index: int, place_in_unet: str, batch_size, num_heads, is_after_intervention=False):
         text_len = attention_probs.size(-1) - 1024 # was - 4096 (64 * 64). Now 1024 is the number of image tokens
 
         # Split batch and heads
@@ -185,13 +189,43 @@ class AttentionStore:
             if step_index not in self.step_store:
                 # self.step_store[step_index] = torch.zeros_like(attention_probs_image2text)
                 # add dim 0 for the blocks
-                self.step_store[step_index] = torch.zeros_like(attention_probs).unsqueeze(0)
+                self.step_store[step_index] = attention_probs.unsqueeze(0)
                 self.step_store_count[step_index] = 0
-            
-            # self.step_store[step_index] += attention_probs_image2text
-            # torch.stack the attention probs to dim 0
-            self.step_store[step_index] = torch.cat([self.step_store[step_index], attention_probs.unsqueeze(0)], dim=0)
-            self.step_store_count[step_index] += 1
+            elif is_after_intervention and step_index not in self.step_store_after_intervention:
+                self.step_store_after_intervention[step_index] = attention_probs.unsqueeze(0)
+            else:
+                # self.step_store[step_index] += attention_probs_image2text
+                # torch.stack the attention probs to dim 0
+                if is_after_intervention:
+                    self.step_store_after_intervention[step_index] = torch.cat([self.step_store_after_intervention[step_index], attention_probs.unsqueeze(0)], dim=0)
+                else:
+                    self.step_store[step_index] = torch.cat([self.step_store[step_index], attention_probs.unsqueeze(0)], dim=0)
+                    self.step_store_count[step_index] += 1
+    
+
+    def store_image_tokens(self, attention_mask, step_index: int, place_in_unet: str, batch_size, num_heads):
+        # Batch, head, 1280 1280
+        binary_mask = (attention_mask != 0).int() # We have a mask with -inf values - we need to convert it to binary
+        binary_mask = binary_mask.sum(dim=1) # Sum over the heads
+        binary_mask = (binary_mask > 0).int() # If there is at least one head that attends to the token, we set it to 1
+
+        # Attention: image -> text
+        # TODO check if we need the transpose
+        # attention_probs_image2text = attention_probs[:, text_len:, :text_len].transpose(1,2)
+
+        # attention_probs = attention_probs.transpose(1,2)
+
+        if step_index in self.save_timesteps:
+            if step_index not in self.step_store_im_im:
+                # self.step_store[step_index] = torch.zeros_like(attention_probs_image2text)
+                # add dim 0 for the blocks
+                self.step_store_im_im[step_index] = binary_mask.unsqueeze(0)
+                # self.step_store_count[step_index] = 0
+            else:
+                # self.step_store[step_index] += attention_probs_image2text
+                # torch.stack the attention probs to dim 0
+                self.step_store_im_im[step_index] = torch.cat([self.step_store_im_im[step_index], binary_mask.unsqueeze(0)], dim=0)
+                # self.step_store_count[step_index] += 1
 
     def aggregate_attention(self, step_indices = None):
         if step_indices is None:
@@ -211,6 +245,14 @@ class AttentionStore:
         # attns = attns.view(*attns.size()[:-1], H, W)
 
         return attns # [1,256,1024] -> [steps, blocks, 256, 2024]
+    
+    def aggregate_image_image(self, step_indices = None):
+        if step_indices is None:
+            step_indices = list(self.step_store_im_im.keys())
+
+        # cat the tensors along new dim 0
+        masks = torch.stack(list(self.step_store_im_im.values()), dim=0)
+        return masks 
     
     def aggregate_attention_old(self, step_indices = None):
         if step_indices is None:

@@ -1979,7 +1979,7 @@ class FluxAttnProcessor2_0:
             attn_weight = scaled_dot_product_attention_att_weight(query, key, value, dropout_p=0.0, is_causal=False)
             attn_weight_norm = attn_weight.softmax(dim=-1)
 
-            self.attention_store.store_attention(attn_weight_norm, step_index, self.layer_name, batch_size, attn.heads)
+            self.attention_store.store_attention(attn_weight_norm, step_index, self.layer_name, batch_size, attn.heads, is_after_intervention=False)
             hidden_states = attn_weight_norm @ value
             # hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False) # Original code
         else:
@@ -1987,7 +1987,7 @@ class FluxAttnProcessor2_0:
             # print("Starting deleaker code")
             attn_weight = scaled_dot_product_attention_att_weight(query, key, value, dropout_p=0.0, is_causal=False)
             attn_weight_norm = attn_weight.softmax(dim=-1)
-            self.attention_store.store_attention(attn_weight_norm, step_index, self.layer_name, batch_size, attn.heads)
+            self.attention_store.store_attention(attn_weight_norm, step_index, self.layer_name, batch_size, attn.heads, is_after_intervention=False)
 
             # save as heatmap - before any intervention
 
@@ -2146,7 +2146,7 @@ class FluxAttnProcessor2_0:
                             # Step 3: Accumulate the sorted probabilities until the sum reaches or exceeds top p%
                             cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
                             mask = cumulative_probs <= top_p
-                            mask[..., 0] = True  # Ensure at least one value is selected
+                            # mask[..., 0] = True  # Ensure at least one value is selected
 
                             # Step 4: Select the corresponding indices
                             top_p_indices = sorted_indices * mask
@@ -2176,6 +2176,7 @@ class FluxAttnProcessor2_0:
                         # print("mean mask: ", mask.sum() / bs * num_heads)
                     else:
                         raise ValueError(f"Invalid top selection method: {top_method_image_image}")
+
 
                     # mean_value_top_k_image_image_indices = torch.mean(values, dim=-1)
                     # print(f"Mean value of top k image-image indices: {mean_value_top_k_image_image_indices}")
@@ -2214,6 +2215,7 @@ class FluxAttnProcessor2_0:
                         mask_flattened = mask.reshape(bs, num_heads, -1)
 
                         # Use flat_indices to set the corresponding positions to 1 (True)
+
                         mask_flattened.scatter_(dim=-1, index=flat_indices, value=float('-inf'))
 
                         # Reshape the mask back to the original shape
@@ -2225,6 +2227,7 @@ class FluxAttnProcessor2_0:
                             print("Nan in mask")
                         mask = mask.reshape(original_shape)
 
+                    self.attention_store.store_image_tokens(mask, step_index, self.layer_name, batch_size, attn.heads) # TODO - mask per entity-entity pair. creates multiple blocksxN
 
                     # Apply mask
                     mask = mask.to(hidden_states.device)
@@ -2243,6 +2246,7 @@ class FluxAttnProcessor2_0:
             
             # Michael - added here to be computed only once
             attn_weight = torch.softmax(attn_weight, dim=-1)
+            self.attention_store.store_attention(attn_weight_norm, step_index, self.layer_name, batch_size, attn.heads, is_after_intervention=True)
 
             hidden_states = attn_weight @ value
             hidden_states = hidden_states.to(hidden_states.device)
