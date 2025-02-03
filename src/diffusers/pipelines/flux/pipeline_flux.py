@@ -203,7 +203,11 @@ class AttentionStore:
                     self.step_store_count[step_index] += 1
     
 
-    def store_image_tokens(self, attention_mask, step_index: int, place_in_unet: str, batch_size, num_heads):
+    def store_image_tokens(self, attention_mask, step_index: int, place_in_unet: str, batch_size, num_heads: int, entities_tuple: tuple, is_after_intervention=False):
+        """
+        
+        entities_tuple - (entity1, entity2)
+        """
         # Batch, head, 1280 1280
         binary_mask = (attention_mask != 0).int() # We have a mask with -inf values - we need to convert it to binary
         binary_mask = binary_mask.sum(dim=1) # Sum over the heads
@@ -214,17 +218,21 @@ class AttentionStore:
         # attention_probs_image2text = attention_probs[:, text_len:, :text_len].transpose(1,2)
 
         # attention_probs = attention_probs.transpose(1,2)
+        if f'{entities_tuple[0]}_{entities_tuple[1]}' not in self.step_store_im_im.keys():
+            self.step_store_im_im[f'{entities_tuple[0]}_{entities_tuple[1]}'] = {}
 
         if step_index in self.save_timesteps:
-            if step_index not in self.step_store_im_im:
+            if step_index not in self.step_store_im_im[f'{entities_tuple[0]}_{entities_tuple[1]}']:
                 # self.step_store[step_index] = torch.zeros_like(attention_probs_image2text)
                 # add dim 0 for the blocks
-                self.step_store_im_im[step_index] = binary_mask.unsqueeze(0)
+                self.step_store_im_im[f'{entities_tuple[0]}_{entities_tuple[1]}'][step_index] = binary_mask.unsqueeze(0)
+                # self.step_store_im_im[step_index] = binary_mask.unsqueeze(0)
                 # self.step_store_count[step_index] = 0
-            else:
+            else: # stacking the blocks
                 # self.step_store[step_index] += attention_probs_image2text
                 # torch.stack the attention probs to dim 0
-                self.step_store_im_im[step_index] = torch.cat([self.step_store_im_im[step_index], binary_mask.unsqueeze(0)], dim=0)
+                self.step_store_im_im[f'{entities_tuple[0]}_{entities_tuple[1]}'][step_index] = torch.cat([self.step_store_im_im[f'{entities_tuple[0]}_{entities_tuple[1]}'][step_index], binary_mask.unsqueeze(0)], dim=0)
+                # self.step_store_im_im[step_index] = torch.cat([self.step_store_im_im[step_index], binary_mask.unsqueeze(0)], dim=0)
                 # self.step_store_count[step_index] += 1
 
     def aggregate_attention(self, step_indices = None):

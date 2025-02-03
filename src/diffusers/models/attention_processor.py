@@ -2227,7 +2227,7 @@ class FluxAttnProcessor2_0:
                             print("Nan in mask")
                         mask = mask.reshape(original_shape)
 
-                    self.attention_store.store_image_tokens(mask, step_index, self.layer_name, batch_size, attn.heads) # TODO - mask per entity-entity pair. creates multiple blocksxN
+                    self.attention_store.store_image_tokens(mask, step_index, self.layer_name, batch_size, attn.heads, (first_entity, second_entity)) # TODO - mask per entity-entity pair. creates multiple blocksxN
 
                     # Apply mask
                     mask = mask.to(hidden_states.device)
