@@ -359,6 +359,7 @@ class FluxPipeline(
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
         skip_tokens = lens_kwargs.get("skip_tokens", None) if lens_kwargs else None
+        merge_ranges = lens_kwargs.get("merge_ranges", None) if lens_kwargs else None
 
         if prompt_embeds is None:
             prompt_2 = prompt_2 or prompt
@@ -388,9 +389,19 @@ class FluxPipeline(
                     num_images_per_prompt=num_images_per_prompt,
                     max_sequence_length=max_sequence_length,
                     device=device,
-            )
-            # replace the skipped tokens with the empty string tokens
-            prompt_embeds[:,skip_tokens[1],:] = prompt_embeds_pads[:,skip_tokens[1],:]
+                )
+                # replace the skipped tokens with the empty string tokens
+                prompt_embeds[:,skip_tokens[1],:] = prompt_embeds_pads[:,skip_tokens[1],:]
+            
+            if merge_ranges is not None:
+                for merge_range in merge_ranges:
+                    # Calculate average embedding for the merge range
+                    merged_embedding = torch.mean(prompt_embeds[:,merge_range[0]:merge_range[1]+1,:], dim=1, keepdim=True)
+                    # Replace the first token in the range with the merged embedding
+                    prompt_embeds[:,merge_range[0],:] = merged_embedding.squeeze(1)
+                    # Remove the other tokens in the range by concatenating before and after, but keep the merged token
+                    prompt_embeds = torch.cat((prompt_embeds[:,:merge_range[0]+1,:], prompt_embeds[:,merge_range[1]:,:]), dim=1)
+
 
         if self.text_encoder is not None:
             if isinstance(self, FluxLoraLoaderMixin) and USE_PEFT_BACKEND:
@@ -644,7 +655,7 @@ class FluxPipeline(
     def interrupt(self):
         return self._interrupt
 
-    @torch.no_grad()
+    # @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
@@ -757,7 +768,7 @@ class FluxPipeline(
             is True, otherwise a `tuple`. When returning a tuple, the first element is a list with the generated
             images.
         """
-        print("@torch.no_grad() is removed for FluxPipeline.__call__")
+        # print("@torch.no_grad() is removed for FluxPipeline.__call__")
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 

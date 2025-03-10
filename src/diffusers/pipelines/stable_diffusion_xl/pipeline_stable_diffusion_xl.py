@@ -296,6 +296,8 @@ class StableDiffusionXLPipeline(
         negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
         lora_scale: Optional[float] = None,
         clip_skip: Optional[int] = None,
+        lens_kwargs: Optional[Dict[str, Any]] = {},
+
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -372,6 +374,9 @@ class StableDiffusionXLPipeline(
             [self.text_encoder, self.text_encoder_2] if self.text_encoder is not None else [self.text_encoder_2]
         )
 
+        skip_tokens = lens_kwargs.get("skip_tokens", None) if lens_kwargs else None
+        print(f"skip_tokens: {skip_tokens}")
+
         if prompt_embeds is None:
             prompt_2 = prompt_2 or prompt
             prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
@@ -379,6 +384,8 @@ class StableDiffusionXLPipeline(
             # textual inversion: process multi-vector tokens if necessary
             prompt_embeds_list = []
             prompts = [prompt, prompt_2]
+
+
             for prompt, tokenizer, text_encoder in zip(prompts, tokenizers, text_encoders):
                 if isinstance(self, TextualInversionLoaderMixin):
                     prompt = self.maybe_convert_prompt(prompt, tokenizer)
@@ -390,6 +397,17 @@ class StableDiffusionXLPipeline(
                     truncation=True,
                     return_tensors="pt",
                 )
+
+                if skip_tokens is not None:
+                    empty_string = ''
+                    empty_text_inputs = tokenizer(
+                        empty_string,
+                        padding="max_length",
+                        max_length=tokenizer.model_max_length,
+                        truncation=True,
+                        return_tensors="pt",
+                    )
+
 
                 text_input_ids = text_inputs.input_ids
                 untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
@@ -407,11 +425,25 @@ class StableDiffusionXLPipeline(
 
                 # We are only ALWAYS interested in the pooled output of the final text encoder
                 pooled_prompt_embeds = prompt_embeds[0]
+                
                 if clip_skip is None:
                     prompt_embeds = prompt_embeds.hidden_states[-2]
                 else:
                     # "2" because SDXL always indexes from the penultimate layer.
                     prompt_embeds = prompt_embeds.hidden_states[-(clip_skip + 2)]
+                
+                if skip_tokens is not None:
+                    empty_text_embeds = text_encoder(empty_text_inputs.input_ids.to(device), output_hidden_states=True)
+                    # replace the skipped tokens with the empty string tokens
+                    if clip_skip is None:
+                        empty_text_embeds = empty_text_embeds.hidden_states[-2]
+                    else:
+                        # "2" because SDXL always indexes from the penultimate layer.
+                        empty_text_embeds = empty_text_embeds.hidden_states[-(clip_skip + 2)]
+
+                    prompt_embeds[:,skip_tokens,:] = empty_text_embeds[:,skip_tokens,:]
+
+
 
                 prompt_embeds_list.append(prompt_embeds)
 
@@ -865,6 +897,7 @@ class StableDiffusionXLPipeline(
             Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
         ] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        lens_kwargs: Optional[Dict[str, Any]] = {},
         **kwargs,
     ):
         r"""
@@ -1097,6 +1130,7 @@ class StableDiffusionXLPipeline(
             negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
             lora_scale=lora_scale,
             clip_skip=self.clip_skip,
+            lens_kwargs=lens_kwargs,
         )
 
         # 4. Prepare timesteps

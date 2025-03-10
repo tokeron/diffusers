@@ -291,6 +291,7 @@ class StableDiffusionAttendAndExcitePipeline(DiffusionPipeline, StableDiffusionM
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         lora_scale: Optional[float] = None,
         clip_skip: Optional[int] = None,
+        lens_kwargs: Optional[Dict[str, Any]] = {},
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -760,6 +761,7 @@ class StableDiffusionAttendAndExcitePipeline(DiffusionPipeline, StableDiffusionM
         scale_factor: int = 20,
         attn_res: Optional[Tuple[int]] = (16, 16),
         clip_skip: Optional[int] = None,
+        lens_kwargs: Optional[Dict[str, Any]] = {},
     ):
         r"""
         The call function to the pipeline for generation.

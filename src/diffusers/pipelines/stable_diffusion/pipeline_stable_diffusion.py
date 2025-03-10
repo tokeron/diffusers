@@ -335,6 +335,7 @@ class StableDiffusionPipeline(
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         lora_scale: Optional[float] = None,
         clip_skip: Optional[int] = None,
+        lens_kwargs: Optional[Dict[str, Any]] = None,
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -382,7 +383,10 @@ class StableDiffusionPipeline(
             batch_size = len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
-
+        
+        skip_tokens = lens_kwargs.get("skip_tokens", None) if lens_kwargs else None
+        print(f"skip_tokens: {skip_tokens}")
+        
         if prompt_embeds is None:
             # textual inversion: process multi-vector tokens if necessary
             if isinstance(self, TextualInversionLoaderMixin):
@@ -395,6 +399,19 @@ class StableDiffusionPipeline(
                 truncation=True,
                 return_tensors="pt",
             )
+
+            if skip_tokens is not None:
+                empty_string = ''
+                empty_text_inputs = self.tokenizer(
+                    empty_string,
+                    padding="max_length",
+                    max_length=self.tokenizer.model_max_length,
+                    truncation=True,
+                    return_tensors="pt",
+                )
+
+
+
             text_input_ids = text_inputs.input_ids
             untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
 
@@ -430,6 +447,24 @@ class StableDiffusionPipeline(
                 # obtaining the final prompt representations passes through the LayerNorm
                 # layer.
                 prompt_embeds = self.text_encoder.text_model.final_layer_norm(prompt_embeds)
+
+            ####
+            if skip_tokens is not None:
+                if clip_skip is None:
+                    empty_text_embeds = self.text_encoder(empty_text_inputs.input_ids.to(device), attention_mask=attention_mask)
+                    empty_text_embeds = empty_text_embeds[0]
+                else:
+                    empty_text_embeds = empty_text_embeds[-1][-(clip_skip + 1)]
+                    # We also need to apply the final LayerNorm here to not mess with the
+                    # representations. The `last_hidden_states` that we typically use for
+                    # obtaining the final prompt representations passes through the LayerNorm
+                    # layer.
+                    empty_text_embeds = self.text_encoder.text_model.final_layer_norm(empty_text_embeds)
+
+                prompt_embeds[:,skip_tokens,:] = empty_text_embeds[:,skip_tokens,:]
+
+
+            ####
 
         if self.text_encoder is not None:
             prompt_embeds_dtype = self.text_encoder.dtype
@@ -799,6 +834,7 @@ class StableDiffusionPipeline(
             Union[Callable[[int, int, Dict], None], PipelineCallback, MultiPipelineCallbacks]
         ] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        lens_kwargs: Optional[Dict[str, Any]] = {},
         **kwargs,
     ):
         r"""
@@ -966,6 +1002,7 @@ class StableDiffusionPipeline(
             negative_prompt_embeds=negative_prompt_embeds,
             lora_scale=lora_scale,
             clip_skip=self.clip_skip,
+            lens_kwargs=lens_kwargs,
         )
 
         # For classifier free guidance, we need to do two forward passes.
