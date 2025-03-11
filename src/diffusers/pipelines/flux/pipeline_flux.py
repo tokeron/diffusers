@@ -397,11 +397,11 @@ class FluxPipeline(
                 for merge_range in merge_ranges:
                     # Calculate average embedding for the merge range
                     merged_embedding = torch.mean(prompt_embeds[:,merge_range[0]:merge_range[1]+1,:], dim=1, keepdim=True)
-                    # Replace the first token in the range with the merged embedding
+                    # # Replace the first token in the range with the merged embedding
                     prompt_embeds[:,merge_range[0],:] = merged_embedding.squeeze(1)
-                    # Remove the other tokens in the range by concatenating before and after, but keep the merged token
-                    prompt_embeds = torch.cat((prompt_embeds[:,:merge_range[0]+1,:], prompt_embeds[:,merge_range[1]:,:]), dim=1)
-
+                    # Zero out the embeddings for the rest of the range
+                    prompt_embeds[:,merge_range[0]+1:merge_range[1]+1,:] = 0
+                    #
 
         if self.text_encoder is not None:
             if isinstance(self, FluxLoraLoaderMixin) and USE_PEFT_BACKEND:
