@@ -398,7 +398,7 @@ class StableDiffusionXLPipeline(
                     return_tensors="pt",
                 )
 
-                if skip_tokens is not None:
+                if skip_tokens is not None and len(skip_tokens[0]) > 0:
                     empty_string = ''
                     empty_text_inputs = tokenizer(
                         empty_string,
@@ -432,8 +432,10 @@ class StableDiffusionXLPipeline(
                     # "2" because SDXL always indexes from the penultimate layer.
                     prompt_embeds = prompt_embeds.hidden_states[-(clip_skip + 2)]
                 
-                if skip_tokens is not None:
+                if skip_tokens is not None and len(skip_tokens[0]) > 0:
                     empty_text_embeds = text_encoder(empty_text_inputs.input_ids.to(device), output_hidden_states=True)
+                    # important - replacing the pooled representation with the empty prompt pooled representation
+                    pooled_prompt_embeds = empty_text_embeds[0]
                     # replace the skipped tokens with the empty string tokens
                     if clip_skip is None:
                         empty_text_embeds = empty_text_embeds.hidden_states[-2]
@@ -441,7 +443,8 @@ class StableDiffusionXLPipeline(
                         # "2" because SDXL always indexes from the penultimate layer.
                         empty_text_embeds = empty_text_embeds.hidden_states[-(clip_skip + 2)]
 
-                    prompt_embeds[:,skip_tokens,:] = empty_text_embeds[:,skip_tokens,:]
+                    prompt_embeds[:,skip_tokens[0],:] = empty_text_embeds[:,skip_tokens[0],:]
+                    
 
 
 
