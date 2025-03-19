@@ -407,6 +407,9 @@ class StableDiffusionXLPipeline(
                         truncation=True,
                         return_tensors="pt",
                     )
+                else:
+                    print("clean run")
+                    
 
 
                 text_input_ids = text_inputs.input_ids
