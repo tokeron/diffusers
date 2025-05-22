@@ -321,6 +321,7 @@ class SanaPipeline(DiffusionPipeline, SanaLoraLoaderMixin):
         max_sequence_length: int = 300,
         complex_human_instruction: Optional[List[str]] = None,
         lora_scale: Optional[float] = None,
+        lens_kwargs: Optional[Dict[str, Any]] = {},
     ):
         r"""
         Encodes the prompt into text encoder hidden states.
@@ -359,6 +360,10 @@ class SanaPipeline(DiffusionPipeline, SanaLoraLoaderMixin):
         else:
             dtype = None
 
+        skip_tokens = lens_kwargs.get("skip_tokens", None) if lens_kwargs else None
+        merge_ranges = lens_kwargs.get("merge_ranges", None) if lens_kwargs else None
+        clip_skip = lens_kwargs.get("clip_skip", None) if lens_kwargs else None
+
         # set lora scale so that monkey patched LoRA
         # function of text encoder can correctly access it
         if lora_scale is not None and isinstance(self, SanaLoraLoaderMixin):
@@ -394,6 +399,28 @@ class SanaPipeline(DiffusionPipeline, SanaLoraLoaderMixin):
 
             prompt_embeds = prompt_embeds[:, select_index]
             prompt_attention_mask = prompt_attention_mask[:, select_index]
+
+            if skip_tokens is not None:
+                empty_string = ''
+                prompt_embeds_pads, prompt_embeds_pads_attention_mask = self._get_gemma_prompt_embeds(
+                    prompt=empty_string,
+                    device=device,
+                    dtype=dtype,
+                    clean_caption=clean_caption,
+                    # num_images_per_prompt=num_images_per_prompt,
+                    max_sequence_length=max_sequence_length,
+                    complex_human_instruction=complex_human_instruction,
+                )
+
+                prompt_embeds_pads = prompt_embeds_pads[:, select_index]
+                prompt_attention_mask_pads = prompt_attention_mask[:, select_index]
+
+                # replace the skipped tokens with the empty string tokens
+                prompt_embeds[:,skip_tokens[1],:] = prompt_embeds_pads[:,skip_tokens[1],:]
+                print()
+
+
+
 
         bs_embed, seq_len, _ = prompt_embeds.shape
         # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
@@ -737,6 +764,7 @@ class SanaPipeline(DiffusionPipeline, SanaLoraLoaderMixin):
             "Please generate only the enhanced description for the prompt below and avoid including any additional commentary or evaluations:",
             "User Prompt: ",
         ],
+        lens_kwargs: Optional[Dict[str, Any]] = {},
     ) -> Union[SanaPipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
@@ -896,6 +924,7 @@ class SanaPipeline(DiffusionPipeline, SanaLoraLoaderMixin):
             max_sequence_length=max_sequence_length,
             complex_human_instruction=complex_human_instruction,
             lora_scale=lora_scale,
+            lens_kwargs=lens_kwargs,
         )
         if self.do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
